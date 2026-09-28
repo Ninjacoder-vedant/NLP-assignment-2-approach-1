@@ -19,6 +19,7 @@ class TokenizedCorpus:
     # @property: used like an attribute (corpus.n_real), computed on access
     @property
     def n_real(self) -> int:
+        """Return the total number of sampleable tokens over all texts."""
         # Total number of sampleable tokens over all texts
         return int(sum(r.sum() for r in self.real))
 
@@ -33,9 +34,16 @@ class LayerPoints:
 class HiddenStateExtractor:
     def __init__(self, model: ModelWrapper, max_length: int = 512, max_tokens_per_batch: int = 16_384,
                  skip_first_token: bool = True):
-        """skip_first_token: exclude the first non-special token of every text. Models without a BOS
-        token (Qwen3-Embedding, Harrier) turn it into an attention sink whose norm is 100-500x the
-        others, which would dominate every covariance-based metric."""
+        """Wrap a loaded model for tokenization and hidden-state extraction.
+
+        Args:
+            model: loaded ModelWrapper.
+            max_length: max tokens per text (capped at the model's limit); longer texts are truncated.
+            max_tokens_per_batch: max padded tokens (rows x longest length) per forward pass.
+            skip_first_token: exclude the first non-special token of every text. Models without a BOS
+                token (Qwen3-Embedding, Harrier) turn it into an attention sink whose norm is 100-500x the
+                others, which would dominate every covariance-based metric.
+        """
         self.model = model
         # Never exceed what the model itself supports
         self.max_length = min(max_length, model.max_length)
@@ -45,6 +53,14 @@ class HiddenStateExtractor:
         self._special = np.array(sorted(model.special_ids))
 
     def tokenize(self, texts: list[str]) -> TokenizedCorpus:
+        """Tokenize texts and mark which tokens may be sampled.
+
+        Args:
+            texts: texts of one language.
+        Returns:
+            TokenizedCorpus with token ids, eligibility masks (not special, not skipped first token),
+            word count and non-special token count.
+        """
         # Tokenize all texts at once; add <bos>/<eos> as the model normally would; cut at max_length
         enc = self.model.tokenizer(texts, add_special_tokens=True, truncation=True, max_length=self.max_length)
         ids = [np.asarray(x, dtype=np.int64) for x in enc["input_ids"]]
@@ -61,7 +77,15 @@ class HiddenStateExtractor:
         return TokenizedCorpus(ids, real, sum(len(t.split()) for t in texts), n_nonspecial)
 
     def _sample(self, corpus: TokenizedCorpus, n: int, rng: np.random.Generator) -> list[np.ndarray]:
-        """Per-text bool masks over positions, selecting n real tokens uniformly over the corpus."""
+        """Choose n eligible tokens uniformly at random over the whole corpus.
+
+        Args:
+            corpus: tokenized texts.
+            n: number of tokens to sample (must be <= corpus.n_real).
+            rng: seeded NumPy generator.
+        Returns:
+            One bool mask per text over its positions; True = sampled.
+        """
         # Number all eligible tokens of the corpus 0..total-1; offsets[s] = first number of text s
         counts = np.array([r.sum() for r in corpus.real])
         offsets = np.concatenate([[0], np.cumsum(counts)])
@@ -78,7 +102,14 @@ class HiddenStateExtractor:
         return sel
 
     def _batches(self, order: list[int], lengths: list[int]):
-        """Consecutive groups of a length-sorted order, each within the padded-token budget."""
+        """Split a length-sorted list of texts into batches within the padded-token budget.
+
+        Args:
+            order: text indices sorted by length (ascending).
+            lengths: token count of every text.
+        Returns:
+            Iterator of lists of text indices.
+        """
         batch = []
         for s in order:
             # Padded batch size = rows x longest length; start a new batch when over budget
@@ -92,6 +123,16 @@ class HiddenStateExtractor:
     # No gradients / autograd bookkeeping: faster and uses less memory
     @torch.inference_mode()
     def extract(self, corpus: TokenizedCorpus, n: int, rng: np.random.Generator) -> LayerPoints:
+        """Sample n tokens and collect their hidden states at every layer.
+
+        Args:
+            corpus: tokenized texts of one language.
+            n: number of tokens to sample.
+            rng: seeded NumPy generator (same seed -> same tokens).
+        Returns:
+            LayerPoints: points [L+1, n, d] float32 on the model's device, and the text index of each token.
+        Raises FloatingPointError if any hidden state is inf/NaN.
+        """
         # Decide which tokens to keep before running the model
         sel = self._sample(corpus, n, rng)
         lengths = [len(x) for x in corpus.ids]

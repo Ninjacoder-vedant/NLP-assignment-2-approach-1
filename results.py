@@ -20,17 +20,30 @@ class ConfigMismatch(RuntimeError):
 
 class ResultStore:
     def __init__(self, root: str | Path = "results"):
+        """Point the store at a results folder (created lazily on first save).
+
+        Args:
+            root: folder that holds all results.
+        """
         self.root = Path(root)
 
     # Folder of one (model, dataset); Path objects join with /
     def _dir(self, model: str, dataset: str) -> Path:
+        """Return the folder root/model/dataset."""
         return self.root / model / dataset
 
     # A language counts as done once its CSV exists
     def exists(self, model: str, dataset: str, lang: str) -> bool:
+        """Return True if the CSV for (model, dataset, lang) is already saved."""
         return (self._dir(model, dataset) / f"{lang}.csv").exists()
 
     def save_lang(self, model: str, dataset: str, lang: str, rows: list[dict]) -> None:
+        """Save the per-layer rows of one language as {lang}.csv (atomically).
+
+        Args:
+            model, dataset, lang: identify the file.
+            rows: one dict per layer.
+        """
         path = self._dir(model, dataset) / f"{lang}.csv"
         path.parent.mkdir(parents=True, exist_ok=True)
         # Write to a temp file first, then rename over the final name
@@ -39,13 +52,27 @@ class ResultStore:
         os.replace(tmp, path)      # atomic: a crash never leaves a half-written file
 
     def save_points(self, model: str, dataset: str, lang: str, points: np.ndarray) -> None:
+        """Save sampled vectors as points/{lang}.npy in float16.
+
+        Args:
+            model, dataset, lang: identify the file.
+            points: [L+1, N, d] array.
+        """
         path = self._dir(model, dataset) / "points" / f"{lang}.npy"
         path.parent.mkdir(parents=True, exist_ok=True)
         # float16 halves the file size; precision is enough for later analysis
         np.save(path, points.astype(np.float16))
 
     def check_or_save_config(self, model: str, dataset: str, config: dict, overwrite: bool = False) -> None:
-        """Refuse to mix results produced under different settings in one folder."""
+        """Refuse to mix results produced under different settings in one folder.
+
+        Args:
+            model, dataset: identify the folder.
+            config: current settings (from Experiment.settings).
+            overwrite: if settings differ, delete old results instead of raising.
+        Saves config as run_config.json when the folder is new or was overwritten.
+        Raises ConfigMismatch if settings differ and overwrite is False.
+        """
         path = self._dir(model, dataset) / "run_config.json"
         if path.exists():
             old = json.loads(path.read_text())
@@ -66,7 +93,12 @@ class ResultStore:
         path.write_text(json.dumps(config, indent=2, ensure_ascii=False))
 
     def update_token_stats(self, model: str, dataset: str, stats: pd.DataFrame) -> None:
-        """Upsert per-language token statistics (resumed runs only see the languages they process)."""
+        """Upsert per-language token statistics (resumed runs only see the languages they process).
+
+        Args:
+            model, dataset: identify the folder.
+            stats: one row per language; replaces existing rows of the same languages in token_stats.csv.
+        """
         path = self._dir(model, dataset) / "token_stats.csv"
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
@@ -76,7 +108,11 @@ class ResultStore:
         stats.sort_values("lang").to_csv(path, index=False)
 
     def load_all(self) -> pd.DataFrame:
-        """Every per-language file concatenated into one tidy table (model, dataset, lang, layer, ...)."""
+        """Every per-language file concatenated into one tidy table (model, dataset, lang, layer, ...).
+
+        Returns:
+            DataFrame with one row per (model, dataset, lang, layer); empty if nothing is saved.
+        """
         # All {model}/{dataset}/{lang}.csv files (token_stats.csv has different columns)
         files = [f for f in sorted(self.root.glob("*/*/*.csv")) if f.name != "token_stats.csv"]
         if not files:

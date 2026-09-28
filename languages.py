@@ -15,6 +15,7 @@ class Language:
     # 3-letter language part of the code: "hin_Deva" -> "hin"
     @property
     def iso3(self) -> str:
+        """Return the 3-letter language part of the code: "hin_Deva" -> "hin"."""
         return self.code.split("_")[0]
 
 

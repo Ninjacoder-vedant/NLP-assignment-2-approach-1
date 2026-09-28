@@ -5,7 +5,11 @@ import torch
 
 
 def setup_hf_token() -> str | None:
-    """Put HF_TOKEN in the environment: Kaggle secret if available, else whatever is already set."""
+    """Put HF_TOKEN in the environment: Kaggle secret if available, else whatever is already set.
+
+    Returns:
+        The token, or None if none was found.
+    """
     # Only look up the Kaggle secret if the token is not already set
     if not os.environ.get("HF_TOKEN"):
         # Outside Kaggle the import fails: silently keep going without a token
@@ -18,6 +22,7 @@ def setup_hf_token() -> str | None:
 
 
 def free_cuda() -> None:
+    """Run garbage collection and release cached GPU memory."""
     # Delete unreferenced Python objects first, then return cached GPU memory to the driver
     gc.collect()
     if torch.cuda.is_available():

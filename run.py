@@ -57,6 +57,14 @@ class RunConfig:
 
 
 def make_dataset(name: str, cfg: RunConfig):
+    """Build a registered dataset with the run's text cap, cache folder and seed.
+
+    Args:
+        name: registered dataset name, e.g. "in22-gen".
+        cfg: run settings (max_texts per granularity, cache_dir, seed).
+    Returns:
+        The dataset object (parallel datasets get max_texts=None, i.e. all rows).
+    """
     # Look up the dataset class by its registered name, e.g. "in22-gen" -> IN22Gen
     cls = DATASETS.get(name)
     # Parallel sets are small: use every row. Monolingual corpora: cap by granularity
@@ -66,6 +74,11 @@ def make_dataset(name: str, cfg: RunConfig):
 
 class Experiment:
     def __init__(self, cfg: RunConfig):
+        """Prepare the result store, metric objects and dataset objects for a run.
+
+        Args:
+            cfg: all run settings.
+        """
         self.cfg = cfg
         # Where CSVs go; also answers "is this language already done?"
         self.store = ResultStore(cfg.out_dir)
@@ -75,18 +88,37 @@ class Experiment:
         self.datasets = [make_dataset(n, cfg) for n in cfg.datasets]
 
     def settings(self, spec, ds) -> dict:
-        """Everything that determines the numbers for one (model, dataset) folder."""
+        """Everything that determines the numbers for one (model, dataset) folder.
+
+        Args:
+            spec: the model's ModelSpec.
+            ds: the dataset object.
+        Returns:
+            Dict saved as run_config.json and compared on resume (except "versions").
+        """
         c = self.cfg
         return {
-            "model": spec.key, "hf_id": spec.hf_id, "dtype": str(resolve_dtype(c.dtype, c.device)),
-            "dataset": ds.name, "max_texts": ds.max_texts, "n_tokens": c.n_tokens, "max_length": c.max_length,
-            "skip_first_token": c.skip_first_token, "seed": c.seed,
-            "metrics": c.metrics, "metric_params": {m: c.metric_params.get(m, {}) for m in c.metrics},
+            "model": spec.key, 
+            "hf_id": spec.hf_id, 
+            "dtype": str(resolve_dtype(c.dtype, c.device)),
+            "dataset": ds.name,
+            "max_texts": ds.max_texts, 
+            "n_tokens": c.n_tokens, 
+            "max_length": c.max_length,
+            "skip_first_token": c.skip_first_token, 
+            "seed": c.seed,
+            "metrics": c.metrics, 
+            "metric_params": {m: c.metric_params.get(m, {}) for m in c.metrics},
             # Library versions are saved for reference but not compared on resume
             "versions": {p: md.version(p) for p in ("torch", "transformers", "sentence-transformers", "datasets")},
         }
 
     def run(self) -> None:
+        """Run every configured model on every dataset and language, skipping finished ones.
+
+        Loads each model once, computes the missing (dataset, language) results and saves them to CSV.
+        Raises ConfigMismatch if a results folder was produced with different settings.
+        """
         # Models are the outer loop: loading a model is the expensive step, so do it once
         for key in self.cfg.models:
             spec = MODEL_SPECS[key]
@@ -120,6 +152,16 @@ class Experiment:
                 model.unload()
 
     def run_dataset(self, key: str, ext: HiddenStateExtractor, ds, langs: list[str]) -> None:
+        """Compute and save per-layer metrics for the given languages of one dataset.
+
+        Args:
+            key: model key (results folder name).
+            ext: extractor wrapping the loaded model.
+            ds: the dataset object.
+            langs: canonical language codes still to compute.
+        Writes one {lang}.csv per language and updates token_stats.csv; languages with fewer than
+        n_tokens eligible tokens are skipped and recorded as such.
+        """
         n = self.cfg.n_tokens
         stats = []
         for lang in langs:
@@ -161,6 +203,11 @@ class Experiment:
 
 
 def parse_args() -> RunConfig:
+    """Read command-line flags (defaults come from RunConfig).
+
+    Returns:
+        The RunConfig for this run. With --list, prints models/datasets/metrics and exits instead.
+    """
     # Defaults come from RunConfig, so CLI and code defaults never disagree
     d = RunConfig()
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

@@ -27,8 +27,15 @@ LANG_COLUMN = re.compile(r"^[a-z]{3}_[A-Z][a-z]{3}$")
 
 
 def match_codes(candidates: Iterable[str]) -> dict[str, str]:
-    """Map canonical codes to FLORES-style candidate codes: exact match first, else same language
-    in another script (e.g. mni_Mtei -> mni_Beng in Flores+)."""
+    """Map canonical codes to a dataset's FLORES-style codes.
+
+    Exact match first, else the same language in another script (e.g. mni_Mtei -> mni_Beng in Flores+).
+
+    Args:
+        candidates: language codes the dataset provides.
+    Returns:
+        {canonical code: dataset code} for every canonical language that was found.
+    """
     candidates = sorted(set(candidates))
     out = {}
     for code, lang in ALL_LANGUAGES.items():
@@ -51,6 +58,13 @@ class BaseDataset(ABC):
     min_chars: ClassVar[int] = 0           # drop shorter texts (never used for parallel data)
 
     def __init__(self, max_texts: int | None = None, cache_dir: str | Path = "cache/texts", seed: int = 0):
+        """Store settings; nothing is downloaded until load() or languages() is called.
+
+        Args:
+            max_texts: keep at most this many texts per language (None = all).
+            cache_dir: root folder for cached texts.
+            seed: sampling seed for monolingual corpora.
+        """
         self.max_texts = max_texts
         self.seed = seed
         # Cache folder depends on max_texts and seed, so different settings never mix
@@ -60,25 +74,46 @@ class BaseDataset(ABC):
     # ---- to implement ----
     @abstractmethod
     def available(self) -> dict[str, str]:
-        """canonical code -> dataset's own code, for every language the dataset has."""
+        """List the languages this dataset has.
+
+        Returns:
+            {canonical code: dataset's own code}, e.g. {"npi_Deva": "nep"}.
+        """
 
     @abstractmethod
     def _iter_texts(self, lang: str) -> Iterable[str]:
-        """Raw texts for one canonical language, in a fixed (seeded) order."""
+        """Yield raw texts for one language, in a fixed (seeded) order.
+
+        Args:
+            lang: canonical language code.
+        Returns:
+            Iterable of raw strings (cleaning and capping happen in load()).
+        """
 
     # ---- shared, do not override ----
     def languages(self) -> list[str]:
+        """Return the sorted canonical codes this dataset has."""
         return sorted(self._available)
 
     def source_code(self, lang: str) -> str:
+        """Return the dataset's own code for canonical `lang` (e.g. "npi_Deva" -> "nep")."""
         return self._available[lang]
 
     # cached_property: available() may hit the network, so call it once and remember the result
     @cached_property
     def _available(self) -> dict[str, str]:
+        """available(), computed once per object and then reused."""
         return self.available()
 
     def load(self, lang: str) -> list[str]:
+        """Return the cleaned texts of one language, from the cache if possible.
+
+        Args:
+            lang: canonical language code.
+        Returns:
+            List of stripped, non-empty texts (at most max_texts). Also written to the cache on first call.
+        Raises KeyError if the dataset lacks `lang`, ValueError if a parallel dataset has an empty text.
+        """
         if lang not in self._available:
             raise KeyError(f"{self.name} has no language '{lang}'")
         # Cache hit: every model reads exactly the same texts, without downloading again
@@ -117,6 +152,11 @@ class WideParallelDataset(BaseDataset):
     # Load the whole (small) table once and keep it for all languages
     @cached_property
     def _columns(self) -> dict[str, list[str]]:
+        """Load the table once and keep rows that are non-empty in every language.
+
+        Returns:
+            {column name, e.g. "hin_Deva": list of texts}, all lists aligned row by row.
+        """
         ds = load_dataset(self.hf_id, split=self.split)
         # Keep language columns only (drop metadata like "domain", "url")
         cols = {c: ds[c] for c in ds.column_names if LANG_COLUMN.match(c)}
@@ -126,9 +166,11 @@ class WideParallelDataset(BaseDataset):
         return {c: [v[i] for i in keep] for c, v in cols.items()}
 
     def available(self) -> dict[str, str]:
+        """Return {canonical code: column name} for the language columns found."""
         return match_codes(self._columns)
 
     def _iter_texts(self, lang):
+        """Return the column of `lang` (a list of aligned texts)."""
         return self._columns[self.source_code(lang)]
 
 
@@ -151,6 +193,7 @@ class FloresPlus(BaseDataset):
     splits: ClassVar[tuple[str, ...]] = ("dev", "devtest")
 
     def available(self) -> dict[str, str]:
+        """Return {canonical code: Flores+ code}, using only variants present in every split."""
         files = HfApi().list_repo_files(self.repo_id, repo_type="dataset")
         # Per split, the set of language codes: "devtest/hin_Deva.jsonl" -> "hin_Deva"
         per_split = [{f[len(s) + 1:-len(".jsonl")] for f in files if f.startswith(s + "/") and f.endswith(".jsonl")}
@@ -159,6 +202,7 @@ class FloresPlus(BaseDataset):
 
     # A generator (uses yield): produces texts one by one instead of building a list
     def _iter_texts(self, lang):
+        """Yield the texts of `lang` for each split in turn, sorted by sentence id."""
         for split in self.splits:
             # Download (and cache) one language file of one split
             path = hf_hub_download(self.repo_id, f"{split}/{self.source_code(lang)}.jsonl", repo_type="dataset")
@@ -179,26 +223,45 @@ class HubFilesDataset(BaseDataset):
 
     @abstractmethod
     def dataset_code(self, lang: Language) -> str:
-        """The dataset's own code for a language, e.g. 'nep' or '20231101.ne'."""
+        """The dataset's own code for a language, e.g. 'nep' or '20231101.ne'.
+
+        Args:
+            lang: Language entry from languages.py.
+        Returns:
+            Code used in the repo's file paths.
+        """
 
     @abstractmethod
     def file_pattern(self, code: str) -> str:
-        """Regex (full match) for the repo files that hold this language."""
+        """Regex (full match) for the repo files that hold this language.
+
+        Args:
+            code: the dataset's own language code (from dataset_code()).
+        Returns:
+            Regex string matched against repo file paths.
+        """
 
     # One API call lists every file in the repo with its size (used for listing and sampling)
     @cached_property
     def _file_sizes(self) -> dict[str, int]:
+        """List every file of the repo once (one API call).
+
+        Returns:
+            {repo file path: size in bytes}.
+        """
         tree = HfApi().list_repo_tree(self.repo_id, repo_type="dataset", recursive=True)
         # Folders have no size attribute: keep files only
         return {e.path: e.size for e in tree if hasattr(e, "size")}
 
     # Files of one language, found by matching the subclass's regex
     def lang_files(self, lang: str) -> list[str]:
+        """Return the sorted repo paths of all files belonging to canonical `lang`."""
         pat = re.compile(self.file_pattern(self.dataset_code(ALL_LANGUAGES[lang])))
         return sorted(f for f in self._file_sizes if pat.fullmatch(f))
 
     # A language is available if at least one of its files exists in the repo
     def available(self) -> dict[str, str]:
+        """Return {canonical code: dataset code} for languages with at least one file in the repo."""
         return {code: self.dataset_code(l) for code, l in ALL_LANGUAGES.items() if self.lang_files(code)}
 
 
@@ -209,6 +272,13 @@ class HubParquetDataset(HubFilesDataset):
     max_shuffle_buffer: ClassVar[int] = 10_000
 
     def _iter_texts(self, lang):
+        """Stream the parquet shards of `lang` in a seeded shuffled order.
+
+        Args:
+            lang: canonical language code.
+        Returns:
+            Iterator over the text column; load() stops it after max_texts.
+        """
         # hf:// URLs let `datasets` stream files directly from the Hub
         urls = [f"hf://datasets/{self.repo_id}/{f}" for f in self.lang_files(lang)]
         # streaming=True: read lazily, never download the whole corpus; read only the text column
@@ -229,9 +299,25 @@ class HubTextDataset(HubFilesDataset):
 
     @abstractmethod
     def _records(self, fh) -> Iterable[str]:
-        """Yield texts from `fh`, starting at an arbitrary byte (skip the partial first record)."""
+        """Yield texts from `fh`, starting at an arbitrary byte (skip the partial first record).
+
+        Args:
+            fh: binary file handle already positioned by seek().
+        Returns:
+            Iterator of decoded texts.
+        """
 
     def _iter_texts(self, lang):
+        """Yield texts of `lang` read at random byte offsets of its files.
+
+        Offsets are drawn with a seed from (seed, lang), weighted by file size, so every run reads the same
+        texts. Duplicate texts from overlapping reads are dropped. Requires max_texts.
+
+        Args:
+            lang: canonical language code.
+        Returns:
+            Iterator of unique texts.
+        """
         if not self.max_texts:
             raise ValueError(f"{self.name} is sampled by random seeks and needs max_texts")
         files = self.lang_files(lang)
@@ -267,9 +353,11 @@ class SangrahaVerified(HubParquetDataset):
     _codes = {"npi": "nep", "ory": "ori"}
 
     def dataset_code(self, lang):
+        """Return Sangraha's folder name: 3-letter code, with 'nep'/'ori' for Nepali/Odia."""
         return self._codes.get(lang.iso3, lang.iso3)
 
     def file_pattern(self, code):
+        """Match the parquet shards under verified/<code>/."""
         return rf"verified/{code}/.+\.parquet"
 
 
@@ -281,9 +369,11 @@ class Wikipedia(HubParquetDataset):
 
     # Wikipedia configs are "<snapshot>.<wiki code>", e.g. "20231101.hi"
     def dataset_code(self, lang):
+        """Return the Wikipedia config name, e.g. '20231101.hi'."""
         return f"{self.snapshot}.{lang.iso1}"
 
     def file_pattern(self, code):
+        """Match the parquet shards under <snapshot>.<wiki code>/."""
         # re.escape: the "." in "20231101.hi" must match a literal dot
         return rf"{re.escape(code)}/.+\.parquet"
 
@@ -298,14 +388,17 @@ class IndicCorpV2(HubTextDataset):
     repo_id = "ai4bharat/IndicCorpV2"
 
     def dataset_code(self, lang):
+        """Return IndicCorp's short code, e.g. 'hi' ('bd' for Bodo, 'dg' for Dogri)."""
         return _INDICCORP_CODES.get(lang.iso1, lang.iso1)
 
     def file_pattern(self, code):
+        """Match data/<code>.txt and split files like data/hi-1.txt."""
         # Matches "data/hi.txt" and "data/hi-1.txt", "data/hi-2.txt", ...
         return rf"data/{code}(-\d+)?\.txt"
 
     # One record = one non-empty line
     def _records(self, fh):
+        """Yield non-empty lines (one sentence each) after skipping the partial first line."""
         fh.readline()                                  # partial line
         for raw in fh:
             # errors="replace": a broken byte becomes "?" instead of crashing
@@ -322,13 +415,16 @@ class IITBIndicMonoDoc(HubTextDataset):
     records_per_seek = 4
 
     def dataset_code(self, lang):
+        """Return IITB's short code, e.g. 'hi' ('bd' for Bodo, 'dg' for Dogri)."""
         return _INDICCORP_CODES.get(lang.iso1, lang.iso1)
 
     def file_pattern(self, code):
+        """Match the shard files <code>/shard-N.txt."""
         return rf"{code}/shard-\d+\.txt"
 
     # One record = the lines between a <DOC_START> and the next <DOC_END>
     def _records(self, fh):
+        """Yield complete documents (lines between <DOC_START> and <DOC_END>, joined by newlines)."""
         doc = None                                     # None until the first complete <DOC_START>
         for raw in fh:
             line = raw.decode("utf-8", errors="replace").rstrip("\r\n")

@@ -37,8 +37,17 @@ MODEL_SPECS: dict[str, ModelSpec] = {s.key: s for s in [
 
 
 def resolve_dtype(name: str, device: str) -> torch.dtype:
-    """'auto': bfloat16 on GPUs with native bf16 (Ampere+), else float32. float16 is never chosen
-    automatically because Gemma-family activations overflow in it."""
+    """Pick the torch dtype to load a model in.
+
+    'auto' gives bfloat16 on GPUs with native bf16 (Ampere+), else float32. float16 is never chosen
+    automatically because Gemma-family activations overflow in it.
+
+    Args:
+        name: "auto" or a torch dtype name like "float32".
+        device: e.g. "cuda:0" or "cpu".
+    Returns:
+        The torch dtype.
+    """
     # Explicit choice, e.g. "float32" -> torch.float32
     if name != "auto":
         return getattr(torch, name)
@@ -51,6 +60,13 @@ def resolve_dtype(name: str, device: str) -> torch.dtype:
 # Common interface for every model family; subclasses only implement _load()
 class ModelWrapper(ABC):
     def __init__(self, spec: ModelSpec, device: str, dtype: torch.dtype):
+        """Load the model and tokenizer (via _load) and record special and padding token ids.
+
+        Args:
+            spec: which model to load.
+            device: e.g. "cuda:0".
+            dtype: precision to load the weights in.
+        """
         self.spec, self.device, self.dtype = spec, device, dtype
         self.model, self.tokenizer, self.max_length = self._load()
         # Inference mode: disables dropout
@@ -63,18 +79,30 @@ class ModelWrapper(ABC):
 
     @abstractmethod
     def _load(self) -> tuple[torch.nn.Module, "transformers.PreTrainedTokenizerBase", int]:
-        """Return (backbone module, tokenizer, max sequence length)."""
+        """Load the model for this family.
+
+        Returns:
+            (backbone module on self.device, tokenizer, max sequence length).
+        """
 
     # Extra arguments passed on every forward call (subclasses may override)
     forward_kwargs: dict = {}
 
     def hidden_states(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> tuple[torch.Tensor, ...]:
-        """(num_layers + 1) tensors of shape [B, T, d]: embedding output, then after each layer."""
+        """Run one forward pass and return the hidden states of every layer.
+
+        Args:
+            input_ids: [B, T] token ids (right-padded).
+            attention_mask: [B, T], 1 for real tokens, 0 for padding.
+        Returns:
+            (num_layers + 1) tensors of shape [B, T, d]: embedding output, then after each layer.
+        """
         out = self.model(input_ids=input_ids, attention_mask=attention_mask,
                          output_hidden_states=True, **self.forward_kwargs)
         return out.hidden_states
 
     def unload(self) -> None:
+        """Delete the model and free its GPU memory."""
         # Drop the model reference and return its GPU memory
         del self.model
         free_cuda()
@@ -86,6 +114,11 @@ class SentenceTransformerWrapper(ModelWrapper):
     """Runs the transformer inside a SentenceTransformer directly (no pooling/dense/normalize head)."""
 
     def _load(self):
+        """Load via sentence-transformers and return its inner HF transformer.
+
+        Returns:
+            (transformer module without pooling/dense/normalize head, tokenizer, max_seq_length).
+        """
         # Imported here so the library is only needed when such a model is used
         from sentence_transformers import SentenceTransformer
         st = SentenceTransformer(self.spec.hf_id, device=self.device, model_kwargs={"dtype": self.dtype})
@@ -100,6 +133,11 @@ class HFTransformerWrapper(ModelWrapper):
     forward_kwargs = {"use_cache": False}
 
     def _load(self):
+        """Load with the transformers class named in spec.auto_class (default AutoModel).
+
+        Returns:
+            (model on device, tokenizer, max sequence length from tokenizer/config).
+        """
         # Class by name, e.g. "AutoModel" -> transformers.AutoModel
         cls = getattr(transformers, self.spec.auto_class)
         model = cls.from_pretrained(self.spec.hf_id, dtype=self.dtype).to(self.device)
@@ -112,5 +150,14 @@ class HFTransformerWrapper(ModelWrapper):
 
 
 def load_model(spec: ModelSpec, device: str, dtype: str = "auto") -> ModelWrapper:
+    """Load a model with the wrapper of its family.
+
+    Args:
+        spec: which model to load.
+        device: e.g. "cuda:0".
+        dtype: "auto" or a torch dtype name (see resolve_dtype).
+    Returns:
+        The loaded ModelWrapper.
+    """
     # Pick the wrapper class of the spec's family and build it
     return MODEL_FAMILIES.get(spec.family)(spec, device, resolve_dtype(dtype, device))
