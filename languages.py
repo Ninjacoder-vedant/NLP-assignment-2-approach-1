@@ -12,11 +12,13 @@ class Language:
     name: str
     iso1: str   # short code used by Wikipedia (ISO 639-1 where it exists, else 639-3)
 
+    # 3-letter language part of the code: "hin_Deva" -> "hin"
     @property
     def iso3(self) -> str:
         return self.code.split("_")[0]
 
 
+# The 22 scheduled Indian languages, keyed by canonical code
 LANGUAGES: dict[str, Language] = {l.code: l for l in [
     Language("asm_Beng", "Assamese", "as"),
     Language("ben_Beng", "Bengali", "bn"),
