@@ -281,7 +281,7 @@ class IITBIndicMonoDoc(HubTextDataset):
     """`{code}/shard-N.txt`, documents between <DOC_START> and <DOC_END> lines."""
     repo_id = "cfilt/IITB-IndicMonoDoc"
     granularity = "document"
-    records_per_seek = 2
+    records_per_seek = 4
 
     def dataset_code(self, lang):
         return _INDICCORP_CODES.get(lang.iso1, lang.iso1)

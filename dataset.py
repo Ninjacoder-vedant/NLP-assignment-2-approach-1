@@ -32,7 +32,7 @@ SAVE_POINTS = False               # True = also save sampled vectors (float16 .n
 
 os.makedirs(OUT_DIR, exist_ok=True)
 rng = np.random.default_rng(SEED)
-torch.manual_seed(SEED)
+torch.manual_seed(SEED) 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # EmbeddingGemma does not support float16 activations: use bfloat16 on GPU if available, else float32
