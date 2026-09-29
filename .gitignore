@@ -1,5 +1,10 @@
 dataset.md
-__pycache__
-cache/
+TODO.md
+.venv/
+__pycache__/
 .pytest_cache/
-.env
+models/
+cache/
+results/
+.env*
+!.env.example

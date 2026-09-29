@@ -1,0 +1,15 @@
+# Core
+numpy>=1.26
+pandas>=2.0
+tqdm>=4.66
+torch>=2.4
+
+# Hugging Face stack
+transformers>=5.2
+sentence-transformers>=5.1
+datasets>=3.0
+huggingface_hub>=0.34
+
+# Isotropy metric and tests
+IsoScore
+pytest>=8.0
