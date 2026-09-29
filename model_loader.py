@@ -6,6 +6,7 @@ To add a model of an existing family, add one `ModelSpec` to MODEL_SPECS. To add
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 import transformers
@@ -73,6 +74,9 @@ class ModelWrapper(ABC):
         # Inference mode: disables dropout
         self.model.eval()
         tok = self.tokenizer
+
+        if tok.pad_token_id is None and tok.eos_token_id is not None:
+            tok.pad_token = tok.eos_token
 
         # Ids of <bos>, <eos>, <pad>, ...: these tokens are never sampled
         self.special_ids: set[int] = set(tok.all_special_ids)
@@ -168,5 +172,11 @@ def load_model(spec: ModelSpec, device: str, dtype: str = "auto") -> ModelWrappe
     Returns:
         The loaded ModelWrapper.
     """
+    # Prefer the repository-local copy when present; otherwise use the Hub id as-is.
+    local = Path(spec.hf_id)
+    if not local.is_dir():
+        local = Path(__file__).resolve().parent / "models" / spec.key
+    if (local / "config.json").is_file():
+        spec = ModelSpec(spec.key, str(local), spec.family, spec.auto_class)
     # Pick the wrapper class of the spec's family and build it
     return MODEL_FAMILIES.get(spec.family)(spec, device, resolve_dtype(dtype, device))
