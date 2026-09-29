@@ -32,7 +32,7 @@ class Registry:
         return deco
 
     def get(self, name: str) -> type:
-        """Return the class registered as `name`; KeyError listing valid names otherwise."""
+        """Return the class registered as `name`; KeyError if not found."""
         try:
             return self._items[name]
         except KeyError:

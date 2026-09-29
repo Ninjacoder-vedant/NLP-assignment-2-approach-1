@@ -2,3 +2,4 @@ dataset.md
 __pycache__
 cache/
 .pytest_cache/
+.env

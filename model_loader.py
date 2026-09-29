@@ -25,7 +25,7 @@ class ModelSpec:
 
 
 # All models, keyed by short name (dict comprehension: {spec.key: spec})
-MODEL_SPECS: dict[str, ModelSpec] = {s.key: s for s in [
+MODEL_SPECS: dict[str, ModelSpec] = {spec.key: spec for spec in [
     ModelSpec("embeddinggemma-300m", "google/embeddinggemma-300m", "sentence_transformer"),
     ModelSpec("qwen3-embedding-0.6b", "Qwen/Qwen3-Embedding-0.6B", "sentence_transformer"),
     ModelSpec("harrier-oss-v1-0.6b", "microsoft/harrier-oss-v1-0.6b", "sentence_transformer"),
@@ -69,13 +69,22 @@ class ModelWrapper(ABC):
         """
         self.spec, self.device, self.dtype = spec, device, dtype
         self.model, self.tokenizer, self.max_length = self._load()
+        
         # Inference mode: disables dropout
         self.model.eval()
         tok = self.tokenizer
+
         # Ids of <bos>, <eos>, <pad>, ...: these tokens are never sampled
         self.special_ids: set[int] = set(tok.all_special_ids)
-        # Padding id: the tokenizer's pad token, else eos, else 0 (first one that is not None)
-        self.pad_id: int = next(i for i in (tok.pad_token_id, tok.eos_token_id, 0) if i is not None)
+
+        # Padding id: many models (e.g. GPT-2, Llama) have no pad token,
+        # so fall back to the eos token, and to 0 if there is no eos either
+        if tok.pad_token_id is not None:
+            self.pad_id: int = tok.pad_token_id
+        elif tok.eos_token_id is not None:
+            self.pad_id = tok.eos_token_id
+        else:
+            self.pad_id = 0
 
     @abstractmethod
     def _load(self) -> tuple[torch.nn.Module, "transformers.PreTrainedTokenizerBase", int]:

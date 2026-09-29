@@ -114,25 +114,35 @@ class BaseDataset(ABC):
             List of stripped, non-empty texts (at most max_texts). Also written to the cache on first call.
         Raises KeyError if the dataset lacks `lang`, ValueError if a parallel dataset has an empty text.
         """
+        # If the dataset doesn't have this language, raise KeyError (like a dict)
         if lang not in self._available:
             raise KeyError(f"{self.name} has no language '{lang}'")
-        # Cache hit: every model reads exactly the same texts, without downloading again
+        
+        # path is cache_dir/lang_code.json, e.g: cache_dir/hin_Deva.json
         path = self.cache_dir / f"{lang}.json"
+
+        # If path exists then read the texts directly from saved json file
         if path.exists():
             return json.loads(path.read_text(encoding="utf-8"))
+        
         texts = []
         for t in self._iter_texts(lang):
             # Clean: strip whitespace, treat non-strings as empty
             t = t.strip() if isinstance(t, str) else ""
-            # Drop empty / too-short texts (for parallel data that would misalign rows, so fail)
+
+            # For parallel datasets, raise the error if the text is too short
+            # Otherwise, just skip the text and continue to the next one
             if len(t) < max(self.min_chars, 1):
                 if self.parallel:
                     raise ValueError(f"{self.name}/{lang}: empty text would break the parallel alignment")
                 continue
+    
             texts.append(t)
+
             # Stop reading as soon as we have enough texts
             if self.max_texts and len(texts) >= self.max_texts:
                 break
+        
         # Write to a temp file, then rename: a crash never leaves a half-written cache
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
@@ -158,12 +168,41 @@ class WideParallelDataset(BaseDataset):
             {column name, e.g. "hin_Deva": list of texts}, all lists aligned row by row.
         """
         ds = load_dataset(self.hf_id, split=self.split)
+
         # Keep language columns only (drop metadata like "domain", "url")
-        cols = {c: ds[c] for c in ds.column_names if LANG_COLUMN.match(c)}
+        # cols stores the column name as key and the list of texts as value
+        cols = {}
+        for col in ds.column_names:
+            if LANG_COLUMN.match(col):
+                cols[col] = ds[col]
+        
         n = len(ds)
+
         # Row indices that are non-empty in every language, so all languages stay aligned
-        keep = [i for i in range(n) if all(isinstance(v[i], str) and v[i].strip() for v in cols.values())]
-        return {c: [v[i] for i in keep] for c, v in cols.items()}
+        keep = []
+        for i in range(n):
+            # Assume row i is usable until some language has a missing or blank text
+            row_ok = True
+
+            # cols.values() is a list of lists, each inner list is the texts for one language
+            for texts in cols.values():
+                if not isinstance(texts[i], str) or not texts[i].strip():
+                    row_ok = False
+                    break
+            if row_ok:
+                keep.append(i)
+
+        print(f"{self.name}/{self.split}: {len(keep)} rows kept out of {n} ({100*len(keep)/n:.1f}%)")
+        
+        # Build the output with only the kept rows for each language column
+        result = {}
+        for col, texts in cols.items():
+            kept_texts = []
+            for i in keep:
+                kept_texts.append(texts[i])
+            result[col] = kept_texts
+        
+        return result
 
     def available(self) -> dict[str, str]:
         """Return {canonical code: column name} for the language columns found."""
