@@ -23,16 +23,11 @@ Network / disk safeguards:
   * optional --probe-shards lets the test try another shard only if needed
 
 Usage:
-    python test_hf_datasets_lowbandwidth.py path/to/datasets.py
+    python test_hf_datasets_lowbandwidth.py
 
-Examples:
-    python test_hf_datasets_lowbandwidth.py datasets.py
-
-    python test_hf_datasets_lowbandwidth.py datasets.py \
-        --samples 1 --workers 1
-
-    python test_hf_datasets_lowbandwidth.py datasets.py \
-        --probe-shards 2 --strict-coverage
+Before running:
+    Make sure `dataset_loader.py` is importable from this script's
+    directory/environment. Edit the static settings near the top if needed.
 
 NOTE:
 This is a smoke/integration test, not a complete corpus audit.
@@ -42,10 +37,7 @@ production `load()` pipeline can successfully return cleaned text.
 
 from __future__ import annotations
 
-import argparse
 import gc
-import importlib
-import importlib.util
 import inspect
 import os
 import re
@@ -81,6 +73,7 @@ class LanguageResult:
     files: int = 0
     probed_files: int = 0
     samples: int = 0
+    preview: str = ""
     elapsed_s: float = 0.0
     ok: bool = False
     skipped: bool = False
@@ -92,28 +85,19 @@ def log(message: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Import the user's dataset module
+# Static test configuration.
+# Edit these values directly instead of passing command-line arguments.
 # ---------------------------------------------------------------------------
 
-def load_target(target: str) -> ModuleType:
-    path = Path(target)
+SAMPLES = 1
+PROBE_SHARDS = 1
+WORKERS = 6
+SEED = 12345
+STRICT_COVERAGE = False
+PRODUCTION_SETTINGS = False
 
-    if path.exists():
-        if path.suffix != ".py":
-            raise ValueError(f"Expected a Python file: {path}")
-
-        module_name = f"_dataset_test_target_{path.stem}"
-        spec = importlib.util.spec_from_file_location(module_name, path)
-
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Could not load {path}")
-
-        module = importlib.util.module_from_spec(spec)
-        sys.path.insert(0, str(path.resolve().parent))
-        spec.loader.exec_module(module)
-        return module
-
-    return importlib.import_module(target)
+# dataset_loader.py must be importable from this script's environment.
+import dataset_loader as module
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +269,12 @@ def discover_files(
 # Test one real loader.
 # ---------------------------------------------------------------------------
 
+def text_preview(text: str, limit: int = 180) -> str:
+    """Return a compact one-line preview for visual language verification."""
+    preview = " ".join(text.split())
+    return preview if len(preview) <= limit else preview[:limit - 3] + "..."
+
+
 def validate_sample(dataset: Any, language: str, text: Any, index: int) -> None:
     if not isinstance(text, str):
         raise TypeError(
@@ -338,7 +328,7 @@ def load_from_probe_shards(
     # # The file existence itself was already checked across ALL shards.
     # ordered_files.sort(key=lambda p: (all_files[p], p))
     # selected = ordered_files[:max(1, probe_shards)]
-    
+
     # Prefer larger shards for the smoke test.
     # We already verify that ALL shards exist; only the probe shard is read.
     ordered_files.sort(key=lambda p: (-all_files[p], p))
@@ -511,6 +501,9 @@ def check_language(
         result.probed_files = probed
         result.samples = len(texts)
 
+        if texts:
+            result.preview = text_preview(texts[0])
+
         if not texts:
             raise AssertionError(
                 "HF files were found and load() completed, "
@@ -573,9 +566,8 @@ def run_dataset(
 
     results: list[LanguageResult] = []
 
-    # Default is intentionally ONE worker.
-    # Six concurrent Parquet streams can create very high instantaneous
-    # bandwidth even when each language only needs one row.
+    # Default is ONE worker.
+    # More workers can increase instantaneous bandwidth substantially.
     worker_count = max(1, min(workers, len(languages)))
 
     def run(lang: str) -> LanguageResult:
@@ -639,6 +631,7 @@ def run_dataset(
                     f"samples={result.samples:<2} "
                     f"{result.elapsed_s:.2f}s"
                 )
+                log(f"        TEXT: {result.preview}")
             elif result.skipped:
                 log(
                     f"  SKIP  {result.language:<10} "
@@ -728,81 +721,6 @@ def print_summary(
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Low-bandwidth HF dataset integration test"
-    )
-
-    parser.add_argument(
-        "target",
-        help="Dataset module or path to datasets.py",
-    )
-
-    parser.add_argument(
-        "--samples",
-        type=int,
-        default=1,
-        help="Valid texts returned per language (default: 1)",
-    )
-
-    parser.add_argument(
-        "--probe-shards",
-        type=int,
-        default=1,
-        help=(
-            "Maximum number of HF shards exposed to the real loader for "
-            "each language (default: 1). All shards are still checked in "
-            "metadata; only this many are read for the smoke test."
-        ),
-    )
-
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=6,
-        help=(
-            "Concurrent languages (default: 1). Increase only if you accept "
-            "higher instantaneous bandwidth."
-        ),
-    )
-
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=12345,
-    )
-
-    parser.add_argument(
-        "--strict-coverage",
-        action="store_true",
-        help="Treat languages missing from a dataset as failures.",
-    )
-
-    parser.add_argument(
-        "--production-settings",
-        action="store_true",
-        help=(
-            "Do not reduce shuffle/seek/block settings. "
-            "Slower and potentially much more bandwidth."
-        ),
-    )
-
-    args = parser.parse_args()
-
-    if args.samples < 1:
-        parser.error("--samples must be >= 1")
-
-    if args.probe_shards < 1:
-        parser.error("--probe-shards must be >= 1")
-
-    if args.workers < 1:
-        parser.error("--workers must be >= 1")
-
-    try:
-        module = load_target(args.target)
-    except Exception:
-        traceback.print_exc()
-        return 2
-
     if not hasattr(module, "DATASETS"):
         log("ERROR: DATASETS registry not found")
         return 2
@@ -810,8 +728,6 @@ def main() -> int:
     if not hasattr(module, "ALL_LANGUAGES"):
         log("ERROR: ALL_LANGUAGES not found")
         return 2
-
-    module.__dict__["ALL_LANGUAGES"] = module.ALL_LANGUAGES
 
     try:
         entries = registry_items(module.DATASETS)
@@ -823,14 +739,17 @@ def main() -> int:
         log("ERROR: DATASETS registry is empty")
         return 2
 
+    # Some dataset implementations reference ALL_LANGUAGES as a module global.
+    module.__dict__["ALL_LANGUAGES"] = module.ALL_LANGUAGES
+
     log("Low-bandwidth HF dataset integration test")
     log(f"Registered datasets : {len(entries)}")
     log(f"Languages/dataset   : {len(module.ALL_LANGUAGES)}")
-    log(f"Samples/language    : {args.samples}")
-    log(f"Probe shards        : {args.probe_shards}")
-    log(f"Workers             : {args.workers}")
-    log(f"Strict coverage     : {args.strict_coverage}")
-    log(f"Production settings : {args.production_settings}")
+    log(f"Samples/language    : {SAMPLES}")
+    log(f"Probe shards        : {PROBE_SHARDS}")
+    log(f"Workers             : {WORKERS}")
+    log(f"Strict coverage     : {STRICT_COVERAGE}")
+    log(f"Production settings : {PRODUCTION_SETTINGS}")
     log(f"Temporary cache     : {CACHE_ROOT}")
 
     results_by_dataset: dict[str, list[LanguageResult]] = {}
@@ -841,12 +760,12 @@ def main() -> int:
                 module,
                 dataset_name,
                 cls,
-                samples=args.samples,
-                seed=args.seed,
-                probe_shards=args.probe_shards,
-                workers=args.workers,
-                strict_coverage=args.strict_coverage,
-                production_settings=args.production_settings,
+                samples=SAMPLES,
+                seed=SEED,
+                probe_shards=PROBE_SHARDS,
+                workers=WORKERS,
+                strict_coverage=STRICT_COVERAGE,
+                production_settings=PRODUCTION_SETTINGS,
             )
         except Exception as exc:
             log(
@@ -858,7 +777,7 @@ def main() -> int:
 
     return print_summary(
         results_by_dataset,
-        strict_coverage=args.strict_coverage,
+        strict_coverage=STRICT_COVERAGE,
     )
 
 
