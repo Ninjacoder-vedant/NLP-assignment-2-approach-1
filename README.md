@@ -39,7 +39,7 @@ Some models or datasets require Hugging Face account approval. Accept the model 
 
 ## Where results go
 
-The experiment writes one CSV for each model, dataset, and language under `results/`. Each CSV contains one row per model layer and the measurements for that layer. Run settings and token counts are saved alongside the CSVs. Re-running the same command skips results already completed with matching settings.
+The experiment writes one CSV for each model, dataset, and language under `results/`. Each CSV contains one row per model layer and the measurements for that layer. Run settings and token counts are saved alongside the CSVs, together with a 3-D PCA projection of every layer's tokens (`pca3d/{lang}.npz`). Add `--plot` to also draw the metrics against depth (`plots/{lang}.png`) and one 3-D scatter per layer (`plots/pca3d/{lang}.png`); `python plotting.py` redraws them from saved results. Re-running the same command skips results already completed with matching settings.
 
 To check that model loading and inference work without starting a dataset experiment, run:
 

@@ -101,3 +101,27 @@ def test_language_with_too_few_tokens_is_skipped(tmp_path):
     stats = pd.read_csv(tmp_path / "res" / "tiny-llama" / "fake" / "token_stats.csv")
     assert stats.status[0].startswith("skipped")
     assert runner.ResultStore(cfg.out_dir).load_all().empty
+
+
+def test_no_n_tokens_uses_all_tokens(tmp_path):
+    cfg = runner.RunConfig(models=["tiny-llama"], datasets=["fake"], langs=["hin_Deva"], n_tokens=None,
+                           device="cpu", out_dir=str(tmp_path / "res"), cache_dir=str(tmp_path / "cache"))
+    runner.Experiment(cfg).run()
+    stats = pd.read_csv(tmp_path / "res" / "tiny-llama" / "fake" / "token_stats.csv")
+    df = runner.ResultStore(cfg.out_dir).load_all()
+    assert (stats.status == "done").all() and not df.empty
+    assert (df.n_tokens == stats.n_tokens[0]).all()
+
+
+@pytest.mark.parametrize("plot", [False, True])
+def test_pca3d_saved_always_and_plotted_with_flag(tmp_path, plot):
+    cfg = runner.RunConfig(models=["tiny-llama"], datasets=["fake"], langs=["hin_Deva"], n_tokens=300, plot=plot,
+                           device="cpu", out_dir=str(tmp_path / "res"), cache_dir=str(tmp_path / "cache"))
+    runner.Experiment(cfg).run()
+    folder = tmp_path / "res" / "tiny-llama" / "fake"
+    n_layers = len(pd.read_csv(folder / "hin_Deva.csv"))
+    with np.load(folder / "pca3d" / "hin_Deva.npz") as proj:
+        assert proj["coords"].shape == (n_layers, 300, 3)
+        assert proj["var_ratio"].shape == (n_layers, 3) and proj["spread"].shape == (n_layers,)
+        assert np.isfinite(proj["coords"]).all() and (proj["var_ratio"].sum(1) <= 1 + 1e-6).all()
+    assert (folder / "plots" / "pca3d" / "hin_Deva.png").exists() == plot

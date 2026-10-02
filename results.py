@@ -4,6 +4,7 @@ language and a rerun skips everything already on disk.
     {root}/{model}/{dataset}/{lang}.csv         one row per layer
     {root}/{model}/{dataset}/token_stats.csv    tokens / words / fertility per language
     {root}/{model}/{dataset}/run_config.json    everything that determines the numbers
+    {root}/{model}/{dataset}/pca3d/{lang}.npz   3-D PCA projection of the tokens of every layer
 """
 import json
 import os
@@ -63,6 +64,24 @@ class ResultStore:
         # float16 halves the file size; precision is enough for later analysis
         np.save(path, points.astype(np.float16))
 
+    def save_pca3d(self, model: str, dataset: str, lang: str, proj: dict[str, np.ndarray]) -> None:
+        """Save a 3-D PCA projection (output of plotting.project_3d) as pca3d/{lang}.npz.
+
+        Args:
+            model, dataset, lang: identify the file.
+            proj: {"coords": [L+1, N, 3], "var_ratio": [L+1, 3], "spread": [L+1]}.
+        """
+        path = self._dir(model, dataset) / "pca3d" / f"{lang}.npz"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # float16 coordinates: unit-length vectors, so the precision is plenty for plotting
+        np.savez_compressed(path, coords=proj["coords"].astype(np.float16), var_ratio=proj["var_ratio"],
+                            spread=proj["spread"])
+
+    def pca3d_files(self) -> list[tuple[Path, tuple[str, str, str]]]:
+        """Every saved 3-D projection as (path, (model, dataset, lang))."""
+        return [(f, (f.parent.parent.parent.name, f.parent.parent.name, f.stem))
+                for f in sorted(self.root.glob("*/*/pca3d/*.npz"))]
+
     def check_or_save_config(self, model: str, dataset: str, config: dict, overwrite: bool = False) -> None:
         """Refuse to mix results produced under different settings in one folder.
 
@@ -86,7 +105,8 @@ class ResultStore:
                     f"{path} was produced with different settings {diff} (old, new). "
                     "Use another --out-dir or pass --overwrite to delete these results.")
             # --overwrite with new settings: delete the old results of this folder
-            for f in [*self._dir(model, dataset).glob("*.csv"), *self._dir(model, dataset).glob("points/*.npy")]:
+            folder = self._dir(model, dataset)
+            for f in [*folder.glob("*.csv"), *folder.glob("points/*.npy"), *folder.glob("pca3d/*.npz")]:
                 f.unlink()
         # First run (or after overwrite): record the settings
         path.parent.mkdir(parents=True, exist_ok=True)

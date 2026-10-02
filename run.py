@@ -5,7 +5,7 @@
     python run.py --models embeddinggemma-300m --device cuda:1   # run a second process on GPU 1
     python run.py --list
     python run.py --models gemma-3-1b-pt --langs hin_Deva --debug   # per-batch / per-layer progress
-    python run.py --models gemma-3-1b-pt --plot          # also save layer-vs-metrics plots per language
+    python run.py --models gemma-3-1b-pt --plot          # also save metric and 3-D PCA plots per language
 
 Reruns skip every (model, dataset, language) already saved.
 """
@@ -24,7 +24,7 @@ from inference import HiddenStateExtractor
 from isotropy_metrics import build_metrics, compute_layer
 from languages import ENGLISH, LANGUAGES
 from model_loader import MODEL_SPECS, load_model, resolve_dtype
-from plotting import plot_results
+from plotting import plot_results, project_3d
 from registry import DATASETS, METRICS
 from results import ResultStore
 from utils import free_cuda, setup_hf_token
@@ -40,9 +40,10 @@ class RunConfig:
     models: list[str] = field(default_factory=lambda: list(MODEL_SPECS))
     datasets: list[str] = field(default_factory=lambda: DATASETS.names())
     langs: list[str] = field(default_factory=lambda: list(LANGUAGES))
-    # Same N for every language, dataset and model (IsoScore depends on N). Languages with fewer
-    # tokens are skipped and logged in token_stats.csv.
-    n_tokens: int = 16_000
+    # None (default) = no sampling: use every collected token of each language.
+    # An int N = sample the same N for every language, dataset and model (IsoScore depends on N);
+    # languages with fewer tokens are then skipped and logged in token_stats.csv.
+    n_tokens: int | None = None
     batch_size: int = 32                  # texts per forward pass
     # How many texts to take from monolingual corpora (parallel datasets use all rows)
     max_texts: dict[str, int] = field(default_factory=lambda: {"sentence": 2000, "document": 200})
@@ -56,7 +57,7 @@ class RunConfig:
     save_points: bool = False             # also dump the sampled vectors to .npy
     overwrite: bool = False               # allow replacing results made with other settings
     debug: bool = False                   # log every forward-pass batch and metric layer
-    plot: bool = False                    # after the run, save layer-vs-metrics plots per language
+    plot: bool = False                    # after the run, save metric and 3-D PCA plots per language
 
 
 def make_dataset(name: str, cfg: RunConfig):
@@ -177,8 +178,9 @@ class Experiment:
             ext: extractor wrapping the loaded model.
             ds: the dataset object.
             langs: canonical language codes still to compute.
-        Writes one {lang}.csv per language and updates token_stats.csv; languages with fewer than
-        n_tokens tokens are skipped and recorded as such.
+        Writes one {lang}.csv per language and updates token_stats.csv. With n_tokens set, languages
+        with fewer than n_tokens tokens are skipped and recorded as such; with n_tokens=None every
+        token is used (no sampling).
         """
         n = self.cfg.n_tokens
         stats = []
@@ -196,7 +198,7 @@ class Experiment:
                     "status": "done"}
             stats.append(stat)
             # Too few tokens to sample N: skip instead of lowering N for everyone
-            if n_real < n:
+            if n is not None and n_real < n:
                 stat["status"] = f"skipped: {n_real} tokens < n_tokens={n}"
                 log.warning("%s %s", tag, stat["status"])
                 continue
@@ -204,7 +206,10 @@ class Experiment:
             # crc32 is a stable hash (Python's hash() changes between runs)
             rng = np.random.default_rng([self.cfg.seed, zlib.crc32(f"{ds.name}/{lang}".encode())])
             # Same N tokens at every layer; points has shape [layers+1, N, d]
-            log.info("%s sampling %d of %d tokens", tag, n, n_real)
+            if n is None:
+                log.info("%s using all %d tokens (no sampling)", tag, n_real)
+            else:
+                log.info("%s sampling %d of %d tokens", tag, n, n_real)
             points = ext.sample(layers, n, rng)
             del layers
             n_layers, d = points.shape[0], points.shape[-1]
@@ -213,10 +218,12 @@ class Experiment:
             rows = []
             for i in range(n_layers):
                 rows.append({"model": key, "dataset": ds.name, "lang": lang, "source_code": stat["source_code"],
-                             "layer": i, "n_tokens": n, "d": d,
+                             "layer": i, "n_tokens": points.shape[1], "d": d,
                              **compute_layer(self.metrics, points[i])})
                 log.debug("%s layer %d/%d done", tag, i, n_layers - 1)
             self.store.save_lang(key, ds.name, lang, rows)
+            # 3-D PCA projection of every layer, always saved (--plot only decides whether it is drawn)
+            self.store.save_pca3d(key, ds.name, lang, project_3d(points))
             if self.cfg.save_points:
                 self.store.save_points(key, ds.name, lang, points.cpu().numpy())
             # Progress line with the last layer's metrics
@@ -245,7 +252,8 @@ def parse_args() -> RunConfig:
     p.add_argument("--langs", nargs="+", default=d.langs, choices=list(LANGUAGES) + [ENGLISH.code])
     p.add_argument("--english", action="store_true", help="also run eng_Latn as a baseline")
     p.add_argument("--metrics", nargs="+", default=d.metrics, choices=METRICS.names())
-    p.add_argument("--n-tokens", type=int, default=d.n_tokens)
+    p.add_argument("--n-tokens", type=int, default=d.n_tokens,
+                   help="sample this many tokens per language (default: no sampling, use all tokens)")
     p.add_argument("--batch-size", type=int, default=d.batch_size, help="texts per forward pass")
     p.add_argument("--max-texts-sentence", type=int, default=d.max_texts["sentence"])
     p.add_argument("--max-texts-document", type=int, default=d.max_texts["document"])
@@ -259,7 +267,8 @@ def parse_args() -> RunConfig:
     p.add_argument("--overwrite", action="store_true", help="replace results produced with other settings")
     p.add_argument("--debug", action="store_true", help="log every forward-pass batch and metric layer")
     p.add_argument("--plot", action="store_true",
-                   help="save {out_dir}/{model}/{dataset}/plots/{lang}.png: layer vs all metrics")
+                   help="save {out_dir}/{model}/{dataset}/plots/{lang}.png (layer vs all metrics) and "
+                        "plots/pca3d/{lang}.png (3-D PCA scatter of every layer)")
     p.add_argument("--list", action="store_true", help="list models, datasets and metrics, then exit")
     a = p.parse_args()
     if a.list:

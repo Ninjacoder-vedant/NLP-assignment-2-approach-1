@@ -63,19 +63,22 @@ class HiddenStateExtractor:
                       int(keep.sum()))
         return [torch.cat(h) for h in layers]
 
-    def sample(self, layers: list[torch.Tensor], n: int, rng: np.random.Generator) -> torch.Tensor:
-        """Pick n tokens uniformly at random (the same tokens at every layer).
+    def sample(self, layers: list[torch.Tensor], n: int | None, rng: np.random.Generator) -> torch.Tensor:
+        """Pick n tokens uniformly at random (the same tokens at every layer), or all of them if n is None.
 
         Args:
             layers: output of extract().
-            n: number of tokens to keep (must be <= the number of collected tokens).
+            n: number of tokens to keep (must be <= the number of collected tokens); None = keep all.
             rng: seeded NumPy generator (same seed -> same tokens).
         Returns:
-            points [L+1, n, d] float32 on the model's device.
+            points [L+1, n, d] float32 on the model's device (n = all collected tokens if n is None).
         Raises FloatingPointError if any selected hidden state is inf/NaN.
         """
-        idx = torch.from_numpy(np.sort(rng.choice(len(layers[0]), size=n, replace=False)))
-        points = torch.stack([h[idx] for h in layers]).to(self.model.device).float()
+        if n is None:
+            points = torch.stack(layers).to(self.model.device).float()
+        else:
+            idx = torch.from_numpy(np.sort(rng.choice(len(layers[0]), size=n, replace=False)))
+            points = torch.stack([h[idx] for h in layers]).to(self.model.device).float()
         # No inf/NaN (e.g. from fp16 overflow)
         if not torch.isfinite(points).all():
             raise FloatingPointError("non-finite hidden states; try --dtype float32")
