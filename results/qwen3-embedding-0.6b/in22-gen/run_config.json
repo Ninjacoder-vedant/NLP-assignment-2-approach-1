@@ -1,10 +1,11 @@
 {
-  "model": "embeddinggemma-300m",
-  "hf_id": "google/embeddinggemma-300m",
+  "model": "qwen3-embedding-0.6b",
+  "hf_id": "Qwen/Qwen3-Embedding-0.6B",
   "dtype": "torch.float32",
   "dataset": "in22-gen",
   "max_texts": null,
   "n_tokens": 16000,
+  "token_sampling": "random texts until >= n_tokens, then n_tokens tokens",
   "seed": 0,
   "metrics": [
     "isoscore",

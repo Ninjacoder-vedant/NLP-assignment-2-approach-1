@@ -1,0 +1,4 @@
+lang,source_code,n_texts,n_words,n_tokens,fertility,status,n_texts_used,n_tokens_used
+eng_Latn,eng_Latn,1024,25347,34097,1.3452085059375862,done,471,16032
+guj_Gujr,guj_Gujr,1024,23283,248679,10.680711248550445,done,65,16169
+hin_Deva,hin_Deva,1024,29541,83542,2.8280017602653937,done,196,16004

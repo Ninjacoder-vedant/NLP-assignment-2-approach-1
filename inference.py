@@ -1,5 +1,8 @@
-"""Hidden-state extraction: run the model over the texts of one language in batches of rows, collect the
-hidden state of every non-special token at every layer, then pick the same N tokens at every layer."""
+"""Hidden-state extraction for one language.
+
+With a token budget N: count every text's tokens (tokenizer only), pick random whole texts until they hold
+>= N tokens, run the model on just those texts (so every token keeps its full sentence context), then pick
+exactly N of their tokens, the same N at every layer. Without a budget: every token of every text."""
 import logging
 import math
 
@@ -25,6 +28,22 @@ class HiddenStateExtractor:
         # Special token ids (<bos>, <eos>, <pad>, ...) as a tensor, for torch.isin lookups
         self._special = torch.tensor(sorted(model.special_ids), dtype=torch.long)
 
+    def _encode(self, texts: list[str], **kwargs):
+        """Tokenize like the model sees it: truncation only at the model's own limit."""
+        return self.model.tokenizer(texts, truncation=True, max_length=self.model.max_length, **kwargs)
+
+    def count_tokens(self, texts: list[str]) -> np.ndarray:
+        """Number of tokens extract() would keep for each text (tokenizer only, no forward pass).
+
+        Args:
+            texts: texts of one language.
+        Returns:
+            [len(texts)] int array of non-special token counts.
+        """
+        special = self.model.special_ids
+        return np.array([sum(i not in special for i in ids) for ids in self._encode(texts)["input_ids"]],
+                        dtype=np.int64)
+
     # No gradients / autograd bookkeeping: faster and uses less memory
     @torch.inference_mode()
     def extract(self, texts: list[str]) -> list[torch.Tensor]:
@@ -43,8 +62,7 @@ class HiddenStateExtractor:
             batch = texts[b * self.batch_size:(b + 1) * self.batch_size]
             # Batch encode: pad to the longest text of the batch. Right padding keeps the positions of
             # real tokens the same as in an unbatched run; truncation only at the model's own limit
-            enc = tok(batch, padding=True, padding_side="right", truncation=True,
-                      max_length=self.model.max_length, return_tensors="pt")
+            enc = self._encode(batch, padding=True, padding_side="right", return_tensors="pt")
             ids, att = enc["input_ids"], enc["attention_mask"]
             # Tokens whose vectors are kept: real (not padding) and not special
             keep = att.bool() & ~torch.isin(ids, self._special)
@@ -83,3 +101,20 @@ class HiddenStateExtractor:
         if not torch.isfinite(points).all():
             raise FloatingPointError("non-finite hidden states; try --dtype float32")
         return points
+
+
+def pick_texts(counts: np.ndarray, n: int, rng: np.random.Generator) -> np.ndarray:
+    """Pick random whole texts until they hold at least n tokens.
+
+    Args:
+        counts: tokens per text (from count_tokens); must sum to >= n.
+        n: token budget.
+        rng: seeded NumPy generator (same seed -> same texts).
+    Returns:
+        Sorted indices of the picked texts (dataset order). Their tokens sum to >= n, and dropping the
+        last text drawn would leave fewer than n.
+    """
+    order = rng.permutation(len(counts))
+    # First position in the shuffled order where the running total reaches n
+    stop = int(np.searchsorted(np.cumsum(counts[order]), n)) + 1
+    return np.sort(order[:stop])
