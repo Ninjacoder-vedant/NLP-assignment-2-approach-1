@@ -1,11 +1,15 @@
 """Hidden-state extraction: tokenize a corpus, sample N real tokens uniformly, and gather their hidden
 states at every layer into one preallocated [L+1, N, d] buffer."""
+import logging
 from dataclasses import dataclass
 
 import numpy as np
 import torch
 
 from model_loader import ModelWrapper
+
+# Child of run.py's "isotropy" logger, so --debug there also turns on these batch lines
+log = logging.getLogger("isotropy.inference")
 
 
 # Tokenized texts of one language, plus which tokens may be sampled
@@ -22,13 +26,6 @@ class TokenizedCorpus:
         """Return the total number of sampleable tokens over all texts."""
         # Total number of sampleable tokens over all texts
         return int(sum(r.sum() for r in self.real))
-
-
-# Output of extraction: the sampled vectors of every layer
-@dataclass
-class LayerPoints:
-    points: torch.Tensor     # [L+1, N, d] float32; index 0 = embedding output
-    text_ids: torch.Tensor   # [N] index of the text each token came from
 
 
 class HiddenStateExtractor:
@@ -73,6 +70,7 @@ class HiddenStateExtractor:
             if self.skip_first_token and r.any():
                 r[np.argmax(r)] = False
             real.append(r)
+        log.debug("tokenized %d texts, %d non-special tokens", len(ids), n_nonspecial)
         # Words counted by whitespace split, for fertility (tokens per word)
         return TokenizedCorpus(ids, real, sum(len(t.split()) for t in texts), n_nonspecial)
 
@@ -122,7 +120,7 @@ class HiddenStateExtractor:
 
     # No gradients / autograd bookkeeping: faster and uses less memory
     @torch.inference_mode()
-    def extract(self, corpus: TokenizedCorpus, n: int, rng: np.random.Generator) -> LayerPoints:
+    def extract(self, corpus: TokenizedCorpus, n: int, rng: np.random.Generator) -> torch.Tensor:
         """Sample n tokens and collect their hidden states at every layer.
 
         Args:
@@ -130,7 +128,7 @@ class HiddenStateExtractor:
             n: number of tokens to sample.
             rng: seeded NumPy generator (same seed -> same tokens).
         Returns:
-            LayerPoints: points [L+1, n, d] float32 on the model's device, and the text index of each token.
+            points [L+1, n, d] float32 on the model's device; index 0 = embedding output.
         Raises FloatingPointError if any hidden state is inf/NaN.
         """
         # Decide which tokens to keep before running the model
@@ -141,9 +139,12 @@ class HiddenStateExtractor:
         order = sorted((s for s in range(len(sel)) if sel[s].any()), key=lambda s: lengths[s])
         dev = self.model.device
         # Output buffers are created after the first batch, once layers and d are known
-        points = text_ids = None
+        points = None
         filled = 0
-        for batch in self._batches(order, lengths):
+        # Materialized so the progress lines can show "batch i/total"
+        batches = list(self._batches(order, lengths))
+        log.debug("forward pass: %d texts in %d batches", len(order), len(batches))
+        for b, batch in enumerate(batches, 1):
             T = lengths[batch[-1]]                       # sorted ascending: last is longest
             # inp = token ids (pad elsewhere), att = 1 on real positions, msk = sampled positions
             inp = torch.full((len(batch), T), self.model.pad_id, dtype=torch.long)
@@ -158,18 +159,17 @@ class HiddenStateExtractor:
             hs = self.model.hidden_states(inp.to(dev), att.to(dev))
             if points is None:
                 points = torch.empty((len(hs), n, hs[0].shape[-1]), dtype=torch.float32, device=dev)
-                text_ids = torch.empty(n, dtype=torch.long, device=dev)
             # k = sampled tokens in this batch
             k = int(msk.sum())
             msk = msk.to(dev)
             # h[msk] picks only the sampled tokens -> [k, d]; write them into the next free slots
             for layer, h in enumerate(hs):
                 points[layer, filled:filled + k] = h[msk].float()
-            # Remember which text each token came from (repeat each text id by its sampled count)
-            text_ids[filled:filled + k] = torch.tensor(batch, device=dev).repeat_interleave(msk.sum(1))
             filled += k
+            log.debug("batch %d/%d: %d texts x %d tokens, %d sampled (%d/%d total)",
+                      b, len(batches), len(batch), T, k, filled, n)
         # Sanity checks: exactly n tokens collected, and no inf/NaN (e.g. from fp16 overflow)
         assert filled == n, (filled, n)
         if not torch.isfinite(points).all():
             raise FloatingPointError("non-finite hidden states; try --dtype float32")
-        return LayerPoints(points, text_ids)
+        return points

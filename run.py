@@ -4,6 +4,7 @@
     python run.py --models gemma-3-1b-pt --datasets in22-gen flores-plus --langs hin_Deva tam_Taml
     python run.py --models embeddinggemma-300m --device cuda:1   # run a second process on GPU 1
     python run.py --list
+    python run.py --models gemma-3-1b-pt --langs hin_Deva --debug   # per-batch / per-layer progress
 
 Reruns skip every (model, dataset, language) already saved.
 """
@@ -54,6 +55,7 @@ class RunConfig:
     cache_dir: str = "cache/texts"
     save_points: bool = False             # also dump the sampled vectors to .npy
     overwrite: bool = False               # allow replacing results made with other settings
+    debug: bool = False                   # log every forward-pass batch and metric layer
 
 
 def make_dataset(name: str, cfg: RunConfig):
@@ -120,8 +122,11 @@ class Experiment:
         Raises ConfigMismatch if a results folder was produced with different settings.
         """
         # Models are the outer loop: loading a model is the expensive step, so do it once
+        log.info("run: %d model(s) x %d dataset(s) x %d language(s) on %s",
+                 len(self.cfg.models), len(self.datasets), len(self.cfg.langs), self.cfg.device)
         for key in self.cfg.models:
             spec = MODEL_SPECS[key]
+            log.info("[%s] checking saved results", key)
             # todo = {dataset name: languages still to compute for this model}
             todo = {}
             for ds in self.datasets:
@@ -147,9 +152,12 @@ class Experiment:
                                            self.cfg.skip_first_token)
                 for ds in self.datasets:
                     if todo[ds.name]:
+                        log.info("[%s/%s] %d language(s) to do: %s", key, ds.name, len(todo[ds.name]), todo[ds.name])
                         self.run_dataset(key, ext, ds, todo[ds.name])
             finally:
                 model.unload()
+                log.info("[%s] model unloaded", key)
+        log.info("run finished")
 
     def run_dataset(self, key: str, ext: HiddenStateExtractor, ds, langs: list[str]) -> None:
         """Compute and save per-layer metrics for the given languages of one dataset.
@@ -164,9 +172,13 @@ class Experiment:
         """
         n = self.cfg.n_tokens
         stats = []
-        for lang in langs:
+        for i_lang, lang in enumerate(langs, 1):
+            tag = f"[{key}/{ds.name}/{lang}]"
             # Load the language dataset and tokenize it
-            corpus = ext.tokenize(ds.load(lang))
+            log.info("%s (%d/%d) loading texts", tag, i_lang, len(langs))
+            texts = ds.load(lang)
+            log.info("%s tokenizing %d texts", tag, len(texts))
+            corpus = ext.tokenize(texts)
             # Token statistics for token_stats.csv (fertility = tokens per word)
             stat = {"lang": lang, "source_code": ds.source_code(lang), "n_texts": len(corpus.ids),
                     "n_words": corpus.n_words, "n_tokens": corpus.n_nonspecial, "n_eligible": corpus.n_real,
@@ -175,29 +187,33 @@ class Experiment:
             # Too few tokens to sample N: skip instead of lowering N for everyone
             if corpus.n_real < n:
                 stat["status"] = f"skipped: {corpus.n_real} eligible tokens < n_tokens={n}"
-                log.warning("[%s/%s/%s] %s", key, ds.name, lang, stat["status"])
+                log.warning("%s %s", tag, stat["status"])
                 continue
             # Seed depends only on (seed, dataset, language): a resumed run samples the same tokens.
             # crc32 is a stable hash (Python's hash() changes between runs)
             rng = np.random.default_rng([self.cfg.seed, zlib.crc32(f"{ds.name}/{lang}".encode())])
-            # Run the model; lp.points has shape [layers+1, N, d]
-            lp = ext.extract(corpus, n, rng)
-            d = lp.points.shape[-1]
+            # Run the model; points has shape [layers+1, N, d]
+            log.info("%s inference: sampling %d of %d eligible tokens", tag, n, corpus.n_real)
+            points = ext.extract(corpus, n, rng)
+            n_layers, d = points.shape[0], points.shape[-1]
             # One row per layer: identifying columns + all metric values (** merges the metric dict in)
-            rows = [{"model": key, "dataset": ds.name, "lang": lang, "source_code": stat["source_code"],
-                     "layer": i, "n_tokens": n, "d": d,
-                     **compute_layer(self.metrics, lp.points[i], lp.text_ids)}
-                    for i in range(lp.points.shape[0])]
+            log.info("%s computing metrics on %d layers", tag, n_layers)
+            rows = []
+            for i in range(n_layers):
+                rows.append({"model": key, "dataset": ds.name, "lang": lang, "source_code": stat["source_code"],
+                             "layer": i, "n_tokens": n, "d": d,
+                             **compute_layer(self.metrics, points[i])})
+                log.debug("%s layer %d/%d done", tag, i, n_layers - 1)
             self.store.save_lang(key, ds.name, lang, rows)
             if self.cfg.save_points:
-                self.store.save_points(key, ds.name, lang, lp.points.cpu().numpy())
+                self.store.save_points(key, ds.name, lang, points.cpu().numpy())
             # Progress line with the last layer's metrics
             last = rows[-1]
-            log.info("[%s/%s/%s] %d layers | last layer: isoscore=%.4f mev=%.4f avg_cos=%.4f id=%.1f",
-                     key, ds.name, lang, len(rows), last.get("isoscore", np.nan), last.get("mev", np.nan),
+            log.info("%s saved %d layers | last layer: isoscore=%.4f mev=%.4f avg_cos=%.4f id=%.1f",
+                     tag, len(rows), last.get("isoscore", np.nan), last.get("mev", np.nan),
                      last.get("avg_cos", np.nan), last.get("id_mle", np.nan))
             # Release the large GPU buffer before the next language
-            del lp
+            del points
             free_cuda()
         self.store.update_token_stats(key, ds.name, pd.DataFrame(stats))
 
@@ -231,6 +247,7 @@ def parse_args() -> RunConfig:
     p.add_argument("--cache-dir", default=d.cache_dir)
     p.add_argument("--save-points", action="store_true", help="also save sampled vectors (float16 .npy)")
     p.add_argument("--overwrite", action="store_true", help="replace results produced with other settings")
+    p.add_argument("--debug", action="store_true", help="log every forward-pass batch and metric layer")
     p.add_argument("--list", action="store_true", help="list models, datasets and metrics, then exit")
     a = p.parse_args()
     if a.list:
@@ -244,13 +261,15 @@ def parse_args() -> RunConfig:
         max_texts={"sentence": a.max_texts_sentence, "document": a.max_texts_document},
         metric_params={"id": {"k": a.id_k}}, skip_first_token=not a.keep_first_token, seed=a.seed,
         device=a.device, dtype=a.dtype, out_dir=a.out_dir, cache_dir=a.cache_dir,
-        save_points=a.save_points, overwrite=a.overwrite)
+        save_points=a.save_points, overwrite=a.overwrite, debug=a.debug)
 
 
 # Runs only when executed as a script (python run.py), not when imported by tests
 if __name__ == "__main__":
     # Libraries log at WARNING only; our own logger shows INFO progress lines
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
-    log.setLevel(logging.INFO)
+    cfg = parse_args()
+    # --debug adds per-batch (inference.py) and per-layer lines; child loggers inherit this level
+    log.setLevel(logging.DEBUG if cfg.debug else logging.INFO)
     setup_hf_token()
-    Experiment(parse_args()).run()
+    Experiment(cfg).run()
