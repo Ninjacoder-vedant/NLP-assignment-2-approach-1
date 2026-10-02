@@ -406,14 +406,36 @@ class Wikipedia(HubParquetDataset):
     snapshot = "20231101"
     granularity = "document"
 
-    # Wikipedia configs are "<snapshot>.<wiki code>", e.g. "20231101.hi"
+    _codes = {
+        "asm": "as",
+        "ben": "bn",
+        "guj": "gu",
+        "hin": "hi",
+        "kan": "kn",
+        "kas": "ks",
+        "gom": "gom",
+        "mal": "ml",
+        "mni": "mni",
+        "mar": "mr",
+        "npi": "ne",
+        "ory": "or",
+        "pan": "pa",
+        "san": "sa",
+        "snd": "sd",
+        "tam": "ta",
+        "tel": "te",
+        "urd": "ur",
+        "brx": "brx", # bodo is not in Wikipedia
+        "sat": "sat",
+        "mai": "mai",
+        "doi": "doi", # dogri is not in Wikipedia
+        "eng": "en",
+    }
+
     def dataset_code(self, lang):
-        """Return the Wikipedia config name, e.g. '20231101.hi'."""
-        return f"{self.snapshot}.{lang.iso1}"
+        return f"{self.snapshot}.{self._codes[lang.iso3]}"
 
     def file_pattern(self, code):
-        """Match the parquet shards under <snapshot>.<wiki code>/."""
-        # re.escape: the "." in "20231101.hi" must match a literal dot
         return rf"{re.escape(code)}/.+\.parquet"
 
 
@@ -446,6 +468,15 @@ class IndicCorpV2(HubTextDataset):
                 yield line
 
 
+# IITB repository uses non-standard directory names for Bodo and Dogri.
+# English (en) is listed on the dataset card but there is currently no
+# `en/` directory in the repository, so the test will report it as skipped.
+_IITB_CODES = {
+    "brx": "bd",  # Bodo
+    "doi": "dg",  # Dogri
+}
+
+
 @DATASETS.register("iitb-indicmonodoc")
 class IITBIndicMonoDoc(HubTextDataset):
     """`{code}/shard-N.txt`, documents between <DOC_START> and <DOC_END> lines."""
@@ -454,8 +485,8 @@ class IITBIndicMonoDoc(HubTextDataset):
     records_per_seek = 4
 
     def dataset_code(self, lang):
-        """Return IITB's short code, e.g. 'hi' ('bd' for Bodo, 'dg' for Dogri)."""
-        return _INDICCORP_CODES.get(lang.iso1, lang.iso1)
+        """Return IITB's repository code for the language."""
+        return _IITB_CODES.get(lang.iso1, lang.iso1)
 
     def file_pattern(self, code):
         """Match the shard files <code>/shard-N.txt."""
@@ -463,10 +494,12 @@ class IITBIndicMonoDoc(HubTextDataset):
 
     # One record = the lines between a <DOC_START> and the next <DOC_END>
     def _records(self, fh):
-        """Yield complete documents (lines between <DOC_START> and <DOC_END>, joined by newlines)."""
-        doc = None                                     # None until the first complete <DOC_START>
+        """Yield complete documents between <DOC_START> and <DOC_END>."""
+        doc = None
+
         for raw in fh:
             line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+
             if line == "<DOC_START>":
                 doc = []
             elif line == "<DOC_END>":
