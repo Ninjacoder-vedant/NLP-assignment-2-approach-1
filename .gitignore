@@ -7,3 +7,4 @@ models/
 cache/
 .env*
 !.env.example
+doubts.md

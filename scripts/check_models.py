@@ -76,14 +76,13 @@ def main():
                     finite = all(bool(torch.isfinite(layer).all()) for layer in layers)
                     if not finite:
                         raise FloatingPointError("hidden states contain NaN or infinity")
-                    extractor = HiddenStateExtractor(model, max_length=32, max_tokens_per_batch=64)
-                    corpus = extractor.tokenize(texts)
+                    extractor = HiddenStateExtractor(model, batch_size=1)
+                    collected = extractor.extract(texts)
                     extracted_shape = None
-                    if corpus.n_real:
-                        extracted = extractor.extract(corpus, min(2, corpus.n_real), np.random.default_rng(0))
-                        extracted_shape = list(extracted.points.shape)
-                        if not bool(torch.isfinite(extracted.points).all()):
-                            raise FloatingPointError("inference extractor returned NaN or infinity")
+                    if len(collected[0]):
+                        # sample() raises FloatingPointError on NaN or infinity
+                        extracted = extractor.sample(collected, min(2, len(collected[0])), np.random.default_rng(0))
+                        extracted_shape = list(extracted.shape)
                     for row, text in enumerate(texts):
                         length = int(encoded["attention_mask"][row].sum())
                         token_ids = encoded["input_ids"][row, :length].tolist()

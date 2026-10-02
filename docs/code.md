@@ -30,7 +30,7 @@ Read the files in the order the data moves through them: text → tokens → hid
 - `ModelSpec` is the list of models. Both wrappers just return `(model, tokenizer, max_length)`.
 
 **6. [inference.py](inference.py): the core logic**
-- `tokenize` works out which tokens can be sampled, `_sample` picks N of them at random, and `extract` runs the model and collects their hidden states.
+- `extract` runs the model over the texts in batches of `batch_size` rows and collects the hidden states of every non-special token; `sample` then picks the same N of them at every layer.
 
 **7. [isotropy_metrics.py](isotropy_metrics.py): the maths**
 - Each metric is one small class. Start with `MaxExplainableVariance`, which is 2 lines.
@@ -65,7 +65,7 @@ texts = ds.load("hin_Deva")
 print(len(texts), texts[:3])
 ```
 
-Then load a model and call `HiddenStateExtractor(model).tokenize(texts[:5])` to see what `ids` and `real` look like.
+Then load a model and call `HiddenStateExtractor(model, batch_size=2).extract(texts[:5])` with `--debug` logging to see which tokens are kept per batch.
 
 Ask whenever you get stuck, on a Python feature or on why something was done a certain way.
 

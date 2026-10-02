@@ -41,13 +41,11 @@ class RunConfig:
     datasets: list[str] = field(default_factory=lambda: DATASETS.names())
     langs: list[str] = field(default_factory=lambda: list(LANGUAGES))
     # Same N for every language, dataset and model (IsoScore depends on N). Languages with fewer
-    # eligible tokens are skipped and logged in token_stats.csv.
+    # tokens are skipped and logged in token_stats.csv.
     n_tokens: int = 16_000
-    max_length: int = 512                 # tokens per text; longer documents are truncated
-    max_tokens_per_batch: int = 16_384    # padded tokens per forward pass
+    batch_size: int = 32                  # texts per forward pass
     # How many texts to take from monolingual corpora (parallel datasets use all rows)
     max_texts: dict[str, int] = field(default_factory=lambda: {"sentence": 2000, "document": 200})
-    skip_first_token: bool = True         # drop the attention-sink first token of every text
     metrics: list[str] = field(default_factory=lambda: METRICS.names())
     metric_params: dict[str, dict] = field(default_factory=lambda: {"id": {"k": 20}})
     seed: int = 0
@@ -109,8 +107,6 @@ class Experiment:
             "dataset": ds.name,
             "max_texts": ds.max_texts, 
             "n_tokens": c.n_tokens, 
-            "max_length": c.max_length,
-            "skip_first_token": c.skip_first_token, 
             "seed": c.seed,
             "metrics": c.metrics, 
             "metric_params": {m: c.metric_params.get(m, {}) for m in c.metrics},
@@ -127,11 +123,16 @@ class Experiment:
         # Models are the outer loop: loading a model is the expensive step, so do it once
         log.info("run: %d model(s) x %d dataset(s) x %d language(s) on %s",
                  len(self.cfg.models), len(self.datasets), len(self.cfg.langs), self.cfg.device)
+
+        # Traverse the model keys
         for key in self.cfg.models:
+            # Find the model spec
             spec = MODEL_SPECS[key]
             log.info("[%s] checking saved results", key)
+
             # todo = {dataset name: languages still to compute for this model}
             todo = {}
+
             for ds in self.datasets:
                 # Stop if this folder holds results made with different settings
                 self.store.check_or_save_config(key, ds.name, self.settings(spec, ds), self.cfg.overwrite)
@@ -142,17 +143,19 @@ class Experiment:
                     log.info("%s has no %s", ds.name, missing)
                 # Keep only languages that exist and have no saved CSV yet (resume)
                 todo[ds.name] = [l for l in self.cfg.langs if l in have and not self.store.exists(key, ds.name, l)]
+            
             # Nothing left for this model: don't even load it
             if not any(todo.values()):
                 log.info("[%s] everything already done", key)
                 continue
+
             log.info("[%s] loading %s", key, spec.hf_id)
             model = load_model(spec, self.cfg.device, self.cfg.dtype)
+
             # try/finally: free GPU memory even if a dataset crashes
             try:
                 # The extractor turns texts into per-layer hidden states for this model
-                ext = HiddenStateExtractor(model, self.cfg.max_length, self.cfg.max_tokens_per_batch,
-                                           self.cfg.skip_first_token)
+                ext = HiddenStateExtractor(model, self.cfg.batch_size)
                 for ds in self.datasets:
                     if todo[ds.name]:
                         log.info("[%s/%s] %d language(s) to do: %s", key, ds.name, len(todo[ds.name]), todo[ds.name])
@@ -160,6 +163,7 @@ class Experiment:
             finally:
                 model.unload()
                 log.info("[%s] model unloaded", key)
+        
         # Plots also cover languages finished by earlier (resumed) runs
         if self.cfg.plot:
             plot_results(self.cfg.out_dir, self.cfg.models, self.cfg.datasets, self.cfg.langs)
@@ -174,33 +178,35 @@ class Experiment:
             ds: the dataset object.
             langs: canonical language codes still to compute.
         Writes one {lang}.csv per language and updates token_stats.csv; languages with fewer than
-        n_tokens eligible tokens are skipped and recorded as such.
+        n_tokens tokens are skipped and recorded as such.
         """
         n = self.cfg.n_tokens
         stats = []
         for i_lang, lang in enumerate(langs, 1):
             tag = f"[{key}/{ds.name}/{lang}]"
-            # Load the language dataset and tokenize it
+            # Load the language dataset and run the model over every text
             log.info("%s (%d/%d) loading texts", tag, i_lang, len(langs))
             texts = ds.load(lang)
-            log.info("%s tokenizing %d texts", tag, len(texts))
-            corpus = ext.tokenize(texts)
-            # Token statistics for token_stats.csv (fertility = tokens per word)
-            stat = {"lang": lang, "source_code": ds.source_code(lang), "n_texts": len(corpus.ids),
-                    "n_words": corpus.n_words, "n_tokens": corpus.n_nonspecial, "n_eligible": corpus.n_real,
-                    "fertility": corpus.n_nonspecial / max(corpus.n_words, 1), "status": "done"}
+            log.info("%s inference on %d texts", tag, len(texts))
+            layers = ext.extract(texts)
+            # Token statistics for token_stats.csv (fertility = tokens per word, words split on whitespace)
+            n_real, n_words = len(layers[0]), sum(len(t.split()) for t in texts)
+            stat = {"lang": lang, "source_code": ds.source_code(lang), "n_texts": len(texts),
+                    "n_words": n_words, "n_tokens": n_real, "fertility": n_real / max(n_words, 1),
+                    "status": "done"}
             stats.append(stat)
             # Too few tokens to sample N: skip instead of lowering N for everyone
-            if corpus.n_real < n:
-                stat["status"] = f"skipped: {corpus.n_real} eligible tokens < n_tokens={n}"
+            if n_real < n:
+                stat["status"] = f"skipped: {n_real} tokens < n_tokens={n}"
                 log.warning("%s %s", tag, stat["status"])
                 continue
             # Seed depends only on (seed, dataset, language): a resumed run samples the same tokens.
             # crc32 is a stable hash (Python's hash() changes between runs)
             rng = np.random.default_rng([self.cfg.seed, zlib.crc32(f"{ds.name}/{lang}".encode())])
-            # Run the model; points has shape [layers+1, N, d]
-            log.info("%s inference: sampling %d of %d eligible tokens", tag, n, corpus.n_real)
-            points = ext.extract(corpus, n, rng)
+            # Same N tokens at every layer; points has shape [layers+1, N, d]
+            log.info("%s sampling %d of %d tokens", tag, n, n_real)
+            points = ext.sample(layers, n, rng)
+            del layers
             n_layers, d = points.shape[0], points.shape[-1]
             # One row per layer: identifying columns + all metric values (** merges the metric dict in)
             log.info("%s computing metrics on %d layers", tag, n_layers)
@@ -240,12 +246,10 @@ def parse_args() -> RunConfig:
     p.add_argument("--english", action="store_true", help="also run eng_Latn as a baseline")
     p.add_argument("--metrics", nargs="+", default=d.metrics, choices=METRICS.names())
     p.add_argument("--n-tokens", type=int, default=d.n_tokens)
-    p.add_argument("--max-length", type=int, default=d.max_length)
-    p.add_argument("--max-tokens-per-batch", type=int, default=d.max_tokens_per_batch)
+    p.add_argument("--batch-size", type=int, default=d.batch_size, help="texts per forward pass")
     p.add_argument("--max-texts-sentence", type=int, default=d.max_texts["sentence"])
     p.add_argument("--max-texts-document", type=int, default=d.max_texts["document"])
     p.add_argument("--id-k", type=int, default=d.metric_params["id"]["k"])
-    p.add_argument("--keep-first-token", action="store_true", help="do not drop the first real token of each text")
     p.add_argument("--seed", type=int, default=d.seed)
     p.add_argument("--device", default=d.device)
     p.add_argument("--dtype", default=d.dtype, choices=["auto", "float32", "bfloat16", "float16"])
@@ -265,9 +269,9 @@ def parse_args() -> RunConfig:
     # Copy of the default config with the parsed values filled in
     return dataclasses.replace(
         d, models=a.models, datasets=a.datasets, langs=langs, metrics=a.metrics, n_tokens=a.n_tokens,
-        max_length=a.max_length, max_tokens_per_batch=a.max_tokens_per_batch,
+        batch_size=a.batch_size,
         max_texts={"sentence": a.max_texts_sentence, "document": a.max_texts_document},
-        metric_params={"id": {"k": a.id_k}}, skip_first_token=not a.keep_first_token, seed=a.seed,
+        metric_params={"id": {"k": a.id_k}}, seed=a.seed,
         device=a.device, dtype=a.dtype, out_dir=a.out_dir, cache_dir=a.cache_dir,
         save_points=a.save_points, overwrite=a.overwrite, debug=a.debug, plot=a.plot)
 
