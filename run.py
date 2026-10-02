@@ -5,6 +5,7 @@
     python run.py --models embeddinggemma-300m --device cuda:1   # run a second process on GPU 1
     python run.py --list
     python run.py --models gemma-3-1b-pt --langs hin_Deva --debug   # per-batch / per-layer progress
+    python run.py --models gemma-3-1b-pt --plot          # also save layer-vs-metrics plots per language
 
 Reruns skip every (model, dataset, language) already saved.
 """
@@ -23,6 +24,7 @@ from inference import HiddenStateExtractor
 from isotropy_metrics import build_metrics, compute_layer
 from languages import ENGLISH, LANGUAGES
 from model_loader import MODEL_SPECS, load_model, resolve_dtype
+from plotting import plot_results
 from registry import DATASETS, METRICS
 from results import ResultStore
 from utils import free_cuda, setup_hf_token
@@ -56,6 +58,7 @@ class RunConfig:
     save_points: bool = False             # also dump the sampled vectors to .npy
     overwrite: bool = False               # allow replacing results made with other settings
     debug: bool = False                   # log every forward-pass batch and metric layer
+    plot: bool = False                    # after the run, save layer-vs-metrics plots per language
 
 
 def make_dataset(name: str, cfg: RunConfig):
@@ -157,6 +160,9 @@ class Experiment:
             finally:
                 model.unload()
                 log.info("[%s] model unloaded", key)
+        # Plots also cover languages finished by earlier (resumed) runs
+        if self.cfg.plot:
+            plot_results(self.cfg.out_dir, self.cfg.models, self.cfg.datasets, self.cfg.langs)
         log.info("run finished")
 
     def run_dataset(self, key: str, ext: HiddenStateExtractor, ds, langs: list[str]) -> None:
@@ -248,6 +254,8 @@ def parse_args() -> RunConfig:
     p.add_argument("--save-points", action="store_true", help="also save sampled vectors (float16 .npy)")
     p.add_argument("--overwrite", action="store_true", help="replace results produced with other settings")
     p.add_argument("--debug", action="store_true", help="log every forward-pass batch and metric layer")
+    p.add_argument("--plot", action="store_true",
+                   help="save {out_dir}/{model}/{dataset}/plots/{lang}.png: layer vs all metrics")
     p.add_argument("--list", action="store_true", help="list models, datasets and metrics, then exit")
     a = p.parse_args()
     if a.list:
@@ -261,7 +269,7 @@ def parse_args() -> RunConfig:
         max_texts={"sentence": a.max_texts_sentence, "document": a.max_texts_document},
         metric_params={"id": {"k": a.id_k}}, skip_first_token=not a.keep_first_token, seed=a.seed,
         device=a.device, dtype=a.dtype, out_dir=a.out_dir, cache_dir=a.cache_dir,
-        save_points=a.save_points, overwrite=a.overwrite, debug=a.debug)
+        save_points=a.save_points, overwrite=a.overwrite, debug=a.debug, plot=a.plot)
 
 
 # Runs only when executed as a script (python run.py), not when imported by tests

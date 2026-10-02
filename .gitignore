@@ -5,6 +5,5 @@ __pycache__/
 .pytest_cache/
 models/
 cache/
-results/
 .env*
 !.env.example
