@@ -5,11 +5,16 @@ tqdm>=4.66
 torch>=2.4
 
 # Hugging Face stack
+# transformers: `dtype=` kwarg needs >=4.56; Qwen3.5 (qwen3.5-0.8b-base) needs a 5.x release
 transformers>=5.2
+# sentence-transformers: EmbeddingGemma / Qwen3-Embedding need >=5.0
 sentence-transformers>=5.1
 datasets>=3.0
 huggingface_hub>=0.34
+python-dotenv>=1.0
 
-# Isotropy metric and tests
+# Isotropy metric
 IsoScore
+
+# Tests
 pytest>=8.0

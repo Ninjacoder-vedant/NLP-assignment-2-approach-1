@@ -43,19 +43,20 @@ def test_extracted_points_match_unbatched_forward(key):
     ext = HiddenStateExtractor(model, max_length=64, max_tokens_per_batch=64)   # forces many batches
     texts = list(FakeDataset(cache_dir="/nonexistent")._iter_texts("hin_Deva"))[:20]
     corpus = ext.tokenize(texts)
-    lp = ext.extract(corpus, 50, np.random.default_rng(0))
+    points = ext.extract(corpus, 50, np.random.default_rng(0))
+    # Unbatched hidden states of every text, to search for each extracted point
+    with torch.inference_mode():
+        per_text = [model.hidden_states(ids, torch.ones_like(ids))
+                    for ids in (torch.from_numpy(x)[None] for x in corpus.ids)]
     for p in range(0, 50, 7):
-        s = int(lp.text_ids[p])
-        ids = torch.from_numpy(corpus.ids[s])[None]
-        with torch.inference_mode():
-            hs = model.hidden_states(ids, torch.ones_like(ids))
-        # the point must equal the hidden state of one sampled position of text s, at every layer
-        sampled = [q for q in range(ids.shape[1]) if torch.allclose(hs[-1][0, q], lp.points[-1, p], atol=1e-4)]
-        assert sampled, f"point {p} not found in text {s}"
-        q = sampled[0]
+        # the point must equal the hidden state of one sampled position of some text, at every layer
+        found = [(s, q) for s, hs in enumerate(per_text) for q in range(hs[-1].shape[1])
+                 if torch.allclose(hs[-1][0, q], points[-1, p], atol=1e-4)]
+        assert found, f"point {p} not found in any text"
+        s, q = found[0]
         assert corpus.real[s][q]
-        for layer in range(len(hs)):
-            torch.testing.assert_close(lp.points[layer, p], hs[layer][0, q].float(), atol=1e-4, rtol=1e-4)
+        for layer, h in enumerate(per_text[s]):
+            torch.testing.assert_close(points[layer, p], h[0, q].float(), atol=1e-4, rtol=1e-4)
 
 
 def test_first_real_token_is_never_sampled():

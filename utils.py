@@ -5,34 +5,40 @@ from pathlib import Path
 import torch
 
 
-def setup_hf_token() -> str | None:
-    """Load HF_TOKEN from the environment, repo .env, or Kaggle secret.
+def is_kaggle() -> bool:
+    """True inside a Kaggle notebook (Kaggle sets KAGGLE_KERNEL_RUN_TYPE in every kernel)."""
+    return "KAGGLE_KERNEL_RUN_TYPE" in os.environ
+
+
+def setup_hf_token() -> str:
+    """Put HF_TOKEN in the environment: Kaggle secret on Kaggle, else the .env file.
+
+    A token that is already set in the environment is kept as is.
 
     Returns:
-        The token, or None if none was found.
+        The token.
+    Raises:
+        RuntimeError: if no token was found.
     """
-    # Read only HF_TOKEN from this repo's ignored .env file when not already exported.
+    # Only look up a token if it is not already set
     if not os.environ.get("HF_TOKEN"):
-        env_file = Path(__file__).resolve().parent / ".env"
-        try:
-            for line in env_file.read_text(encoding="utf-8").splitlines():
-                key, separator, value = line.partition("=")
-                if separator and key.strip() == "HF_TOKEN":
-                    token = value.strip().strip("\"'")
-                    if token:
-                        os.environ["HF_TOKEN"] = token
-                        break
-        except OSError:
-            pass
-    # Only look up the Kaggle secret if the token is still missing.
-    if not os.environ.get("HF_TOKEN"):
-        # Outside Kaggle the import fails: silently keep going without a token.
-        try:
-            from kaggle_secrets import UserSecretsClient
-            os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
-        except Exception:
-            pass
-    return os.environ.get("HF_TOKEN")
+        if is_kaggle():
+            # The secret may not be attached to this notebook: fall through to the error below
+            try:
+                from kaggle_secrets import UserSecretsClient
+                os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
+            except Exception:
+                pass
+        else:
+            # Imported here so Kaggle does not need python-dotenv installed
+            from dotenv import load_dotenv
+            # Finds the nearest .env walking up from this file
+            load_dotenv()
+    token = os.environ.get("HF_TOKEN")
+    if not token:
+        where = "add HF_TOKEN under Add-ons > Secrets" if is_kaggle() else "add HF_TOKEN=... to .env file"
+        raise RuntimeError(f"HF_TOKEN not found: {where}")
+    return token
 
 
 def free_cuda() -> None:

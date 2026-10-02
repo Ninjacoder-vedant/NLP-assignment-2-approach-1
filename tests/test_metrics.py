@@ -8,11 +8,8 @@ from isotropy_metrics import build_metrics, compute_layer
 ALL = build_metrics(["isoscore", "mev", "avgcos", "id"])
 
 
-def run(X, text_ids=None):
-    X = torch.as_tensor(X, dtype=torch.float32)
-    if text_ids is None:
-        text_ids = torch.arange(X.shape[0])
-    return compute_layer(ALL, X, torch.as_tensor(text_ids))
+def run(X):
+    return compute_layer(ALL, torch.as_tensor(X, dtype=torch.float32))
 
 
 def test_isoscore_matches_official_package():
@@ -56,11 +53,10 @@ def test_intrinsic_dimension_ignores_exact_duplicates():
     assert 2.5 < r["id_mle"] < 3.5
 
 
-def test_avgcos_equals_brute_force_over_cross_text_pairs():
+def test_avgcos_close_to_brute_force_over_all_pairs():
     rng = np.random.default_rng(0)
     X = rng.normal(size=(300, 8)) + 2.0
-    text_ids = rng.integers(0, 40, size=300)
     U = X / np.linalg.norm(X, axis=1, keepdims=True)
-    C = U @ U.T
-    cross = text_ids[:, None] != text_ids[None, :]
-    assert run(X, text_ids)["avg_cos"] == pytest.approx(C[cross].mean(), abs=1e-6)
+    # Random pairs estimate the mean over all ordered pairs; 1e6 samples -> error ~1e-4
+    assert run(X)["avg_cos"] == pytest.approx((U @ U.T).mean(), abs=2e-3)
+    assert run(X)["avg_cos"] == run(X)["avg_cos"]           # seeded: same value every run
