@@ -113,6 +113,8 @@ class Experiment:
             # How the N tokens are drawn (changes the numbers, so a change needs --overwrite)
             "token_sampling": None if c.n_tokens is None else "all texts run; n_tokens drawn uniformly from all tokens",
             "pooling": "mean / last over non-special tokens",
+            # Models with a norm after the last layer get one extra entry (L+2 hidden states)
+            "final_norm": "last layer saved before and after the final norm",
             "seed": c.seed,
             "metrics": c.metrics, 
             "metric_params": {m: c.metric_params.get(m, {}) for m in c.metrics},
@@ -226,17 +228,19 @@ class Experiment:
             rows = []
             for view, points in views.items():
                 n_layers, n_points, d = points.shape
+                # e.g. "embeddings", "layer 1", ..., "layer L (before final norm)", "layer L (after final norm)"
+                names = ext.model.layer_names(n_layers)
                 log.info("%s [%s] computing metrics on %d layers x %d points", tag, view, n_layers, n_points)
                 for i in range(n_layers):
                     # One layer on the device at a time (float32 for the metrics)
                     X = points[i].to(dev).float()
                     rows.append({"model": key, "dataset": ds.name, "lang": lang, "source_code": stat["source_code"],
-                                 "view": view, "layer": i, "n_points": n_points, "d": d,
+                                 "view": view, "layer": i, "layer_name": names[i], "n_points": n_points, "d": d,
                                  **compute_layer(self.metrics, X)})
                     log.debug("%s [%s] layer %d/%d done", tag, view, i, n_layers - 1)
                 del X
                 # 3-D PCA projection of every layer, always saved (--plot only decides whether it is drawn)
-                self.store.save_pca3d(key, ds.name, lang, view, project_3d(points, dev))
+                self.store.save_pca3d(key, ds.name, lang, view, {**project_3d(points, dev), "layer_names": names})
                 if self.cfg.save_points:
                     self.store.save_points(key, ds.name, lang, view, points)
                 # Progress line with the last layer's metrics

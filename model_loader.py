@@ -4,8 +4,10 @@ To add a model of an existing family, add one `ModelSpec` to MODEL_SPECS. To add
 (e.g. an encoder-decoder), subclass `ModelWrapper`, implement `_load`, and register it with
 `@MODEL_FAMILIES.register("family-name")`.
 """
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from inspect import getsource
 from pathlib import Path
 
 import torch
@@ -14,6 +16,8 @@ from transformers import AutoTokenizer
 
 from registry import MODEL_FAMILIES
 from utils import free_cuda
+
+log = logging.getLogger("isotropy.model_loader")
 
 
 # Description of one model; frozen=True makes it read-only
@@ -58,6 +62,40 @@ def resolve_dtype(name: str, device: str) -> torch.dtype:
     return torch.float32
 
 
+def find_final_norm(model: torch.nn.Module) -> tuple[str | None, torch.nn.Module | None, torch.nn.Module | None]:
+    """Find the decoder's final norm: a `norm` child that sits next to a `layers` ModuleList.
+
+    Norms inside a layer or in a vision tower have no `layers` sibling, so they are skipped.
+
+    Args:
+        model: the backbone module.
+    Returns:
+        (dotted path of the norm, the norm module, the decoder module owning it), or (None, None, None).
+    """
+    for path, module in model.named_modules():
+        layers = getattr(module, "layers", None)
+        norm = getattr(module, "norm", None)
+        if isinstance(layers, torch.nn.ModuleList) and isinstance(norm, torch.nn.Module):
+            return (f"{path}.norm" if path else "norm"), norm, module
+    return None, None, None
+
+
+def set_tie_last_hidden_states(model: torch.nn.Module, tie: bool) -> None:
+    """Set config.tie_last_hidden_states on every (sub)config, so nested text models (Qwen3.5) follow it.
+
+    True (transformers' default): hidden_states[-1] is replaced by last_hidden_state (after the final norm).
+    False: hidden_states[-1] stays the raw output of the last layer (before the final norm).
+    """
+    for module in model.modules():
+        cfg = getattr(module, "config", None)
+        if cfg is None:
+            continue
+        cfg.tie_last_hidden_states = tie
+        for sub in ("text_config", "vision_config"):
+            if getattr(cfg, sub, None) is not None:
+                getattr(cfg, sub).tie_last_hidden_states = tie
+
+
 # Common interface for every model family; subclasses only implement _load()
 class ModelWrapper(ABC):
     def __init__(self, spec: ModelSpec, device: str, dtype: torch.dtype):
@@ -90,6 +128,56 @@ class ModelWrapper(ABC):
         else:
             self.pad_id = 0
 
+        # Path of the final norm (e.g. "norm") when the last layer is followed by one, else None
+        self.final_norm: str | None = self._split_final_norm()
+
+    @torch.inference_mode()
+    def _split_final_norm(self) -> str | None:
+        """Detect a norm after the last layer; if there is one, keep the last layer's raw output too.
+
+        Sets tie_last_hidden_states=False, so hidden_states[-1] is the last layer before the final norm,
+        and hidden_states() appends last_hidden_state (after it). One test forward checks that
+        norm(hidden_states[-1]) == last_hidden_state, i.e. the split is exactly the final norm.
+
+        Returns:
+            Dotted path of the final norm module, or None if the model has none.
+        Raises:
+            RuntimeError: if the norm exists but the outputs do not match norm(pre) == post.
+        """
+        path, norm, decoder = find_final_norm(self.model)
+        # A norm module that forward never calls does not count
+        if norm is None or "self.norm(" not in getsource(type(decoder).forward):
+            log.info("[%s] no final norm after the last layer: L+1 hidden states", self.spec.key)
+            return None
+        set_tie_last_hidden_states(self.model, False)
+
+        enc = self.tokenizer("Hello, how are you?", return_tensors="pt")
+        out = self.model(input_ids=enc["input_ids"].to(self.device),
+                         attention_mask=enc["attention_mask"].to(self.device),
+                         output_hidden_states=True, **self.forward_kwargs)
+        pre, post = out.hidden_states[-1], out.last_hidden_state
+        if not torch.allclose(norm(pre).float(), post.float(), rtol=1e-4, atol=1e-5):
+            raise RuntimeError(f"[{self.spec.key}] {path} found, but norm(hidden_states[-1]) != last_hidden_state "
+                               "with tie_last_hidden_states=False")
+        log.info("[%s] final norm %s after the last layer: L+2 hidden states (before and after it)",
+                 self.spec.key, path)
+        return path
+
+    def layer_names(self, n: int) -> list[str]:
+        """Names of the n entries hidden_states() returns, e.g. for plots and metrics.csv.
+
+        Args:
+            n: number of hidden states (L+1, or L+2 with a final norm).
+        Returns:
+            ["embeddings", "layer 1", ..., "layer L"], and with a final norm the last two are
+            "layer L (before final norm)" and "layer L (after final norm)".
+        """
+        names = ["embeddings"] + [f"layer {i}" for i in range(1, n)]
+        if self.final_norm:
+            last = n - 2
+            names[-2:] = [f"layer {last} (before final norm)", f"layer {last} (after final norm)"]
+        return names
+
     @abstractmethod
     def _load(self) -> tuple[torch.nn.Module, "transformers.PreTrainedTokenizerBase", int]:
         """Load the model for this family.
@@ -108,10 +196,13 @@ class ModelWrapper(ABC):
             input_ids: [B, T] token ids (right-padded).
             attention_mask: [B, T], 1 for real tokens, 0 for padding.
         Returns:
-            (num_layers + 1) tensors of shape [B, T, d]: embedding output, then after each layer.
+            Tensors of shape [B, T, d]: embedding output, then after each layer (L+1). With a final norm,
+            the last layer is its raw output and last_hidden_state (after the norm) is appended (L+2).
         """
         out = self.model(input_ids=input_ids, attention_mask=attention_mask,
                          output_hidden_states=True, **self.forward_kwargs)
+        if self.final_norm:
+            return (*out.hidden_states, out.last_hidden_state)
         return out.hidden_states
 
     def unload(self) -> None:

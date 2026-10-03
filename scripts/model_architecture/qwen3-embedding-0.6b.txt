@@ -1,0 +1,88 @@
+===== qwen3-embedding-0.6b  (Qwen/Qwen3-Embedding-0.6B, family=sentence_transformer) =====
+
+Backbone class: transformers.models.qwen3.modeling_qwen3.Qwen3Model
+Config class:   Qwen3Config
+Tokenizer:      Qwen2Tokenizer
+dtype: torch.float32, device: cuda:0
+
+Qwen3Model(
+  (embed_tokens): Embedding(151669, 1024)
+  (layers): ModuleList(
+    (0-27): 28 x Qwen3DecoderLayer(
+      (self_attn): Qwen3Attention(
+        (q_proj): Linear(in_features=1024, out_features=2048, bias=False)
+        (k_proj): Linear(in_features=1024, out_features=1024, bias=False)
+        (v_proj): Linear(in_features=1024, out_features=1024, bias=False)
+        (o_proj): Linear(in_features=2048, out_features=1024, bias=False)
+        (q_norm): Qwen3RMSNorm((128,), eps=1e-06)
+        (k_norm): Qwen3RMSNorm((128,), eps=1e-06)
+      )
+      (mlp): Qwen3MLP(
+        (gate_proj): Linear(in_features=1024, out_features=3072, bias=False)
+        (up_proj): Linear(in_features=1024, out_features=3072, bias=False)
+        (down_proj): Linear(in_features=3072, out_features=1024, bias=False)
+        (act_fn): SiLUActivation()
+      )
+      (input_layernorm): Qwen3RMSNorm((1024,), eps=1e-06)
+      (post_attention_layernorm): Qwen3RMSNorm((1024,), eps=1e-06)
+    )
+  )
+  (norm): Qwen3RMSNorm((1024,), eps=1e-06)
+  (rotary_emb): Qwen3RotaryEmbedding()
+)
+
+Distinct module classes:
+  Embedding
+  Linear
+  ModuleList
+  Qwen3Attention
+  Qwen3DecoderLayer
+  Qwen3MLP
+  Qwen3Model
+  Qwen3RMSNorm
+  Qwen3RotaryEmbedding
+  SiLUActivation
+
+Input: 'Hello, how are you?'
+hidden states: 29 (tied) / 29 (untied), shape per layer (1, 7, 1024)  [batch, seq_len, hidden]
+
+layer | equal |   max |diff| |  mean |diff| |    min cos |   mean cos
+------------------------------------------------------------------------
+    0 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    1 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    2 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    3 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    4 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    5 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    6 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    7 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    8 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    9 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   10 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   11 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   12 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   13 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   14 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   15 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   16 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   17 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   18 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   19 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   20 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   21 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   22 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   23 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   24 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   25 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   26 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   27 |  True |     0.000000 |     0.000000 |   0.999999 |   1.000000
+   28 | False |   427.124603 |    10.079824 |   0.793507 |   0.896012
+
+tied[-1] == last_hidden_state exactly?   True
+untied[-1] == last_hidden_state exactly? False
+
+----- Final norm check -----
+Final norm module:   norm -> Qwen3RMSNorm((1024,), eps=1e-06)
+Qwen3Model.forward calls self.norm(...)? True
+norm(untied[-1]) == last_hidden_state exactly? True
+max |norm(untied[-1]) - last_hidden_state|:    0.000000

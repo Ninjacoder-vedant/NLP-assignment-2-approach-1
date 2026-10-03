@@ -1,0 +1,74 @@
+===== llama-3.2-1b  (meta-llama/Llama-3.2-1B, family=hf) =====
+
+Backbone class: transformers.models.llama.modeling_llama.LlamaModel
+Config class:   LlamaConfig
+Tokenizer:      TokenizersBackend
+dtype: torch.float32, device: cuda:0
+
+LlamaModel(
+  (embed_tokens): Embedding(128256, 2048)
+  (layers): ModuleList(
+    (0-15): 16 x LlamaDecoderLayer(
+      (self_attn): LlamaAttention(
+        (q_proj): Linear(in_features=2048, out_features=2048, bias=False)
+        (k_proj): Linear(in_features=2048, out_features=512, bias=False)
+        (v_proj): Linear(in_features=2048, out_features=512, bias=False)
+        (o_proj): Linear(in_features=2048, out_features=2048, bias=False)
+      )
+      (mlp): LlamaMLP(
+        (gate_proj): Linear(in_features=2048, out_features=8192, bias=False)
+        (up_proj): Linear(in_features=2048, out_features=8192, bias=False)
+        (down_proj): Linear(in_features=8192, out_features=2048, bias=False)
+        (act_fn): SiLUActivation()
+      )
+      (input_layernorm): LlamaRMSNorm((2048,), eps=1e-05)
+      (post_attention_layernorm): LlamaRMSNorm((2048,), eps=1e-05)
+    )
+  )
+  (norm): LlamaRMSNorm((2048,), eps=1e-05)
+  (rotary_emb): LlamaRotaryEmbedding()
+)
+
+Distinct module classes:
+  Embedding
+  Linear
+  LlamaAttention
+  LlamaDecoderLayer
+  LlamaMLP
+  LlamaModel
+  LlamaRMSNorm
+  LlamaRotaryEmbedding
+  ModuleList
+  SiLUActivation
+
+Input: 'Hello, how are you?'
+hidden states: 17 (tied) / 17 (untied), shape per layer (1, 7, 2048)  [batch, seq_len, hidden]
+
+layer | equal |   max |diff| |  mean |diff| |    min cos |   mean cos
+------------------------------------------------------------------------
+    0 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    1 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    2 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    3 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    4 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    5 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    6 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    7 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    8 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    9 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   10 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   11 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   12 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   13 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   14 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   15 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   16 | False |   131.706253 |     1.505378 |   0.907254 |   0.974433
+
+tied[-1] == last_hidden_state exactly?   True
+untied[-1] == last_hidden_state exactly? False
+
+----- Final norm check -----
+Final norm module:   norm -> LlamaRMSNorm((2048,), eps=1e-05)
+LlamaModel.forward calls self.norm(...)? True
+norm(untied[-1]) == last_hidden_state exactly? True
+max |norm(untied[-1]) - last_hidden_state|:    0.000000

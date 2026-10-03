@@ -90,6 +90,7 @@ def test_run_resume_and_config_guard(tmp_path):
     assert set(df.view) == set(VIEWS)
     for (m, l, v), g in df.groupby(["model", "lang", "view"]):
         assert sorted(g.layer) == list(range(len(g)))                   # embeddings + every layer
+        assert g.sort_values("layer").layer_name.iloc[0] == "embeddings"
         assert g[["isoscore", "mev", "avg_cos"]].notna().all().all()
         # Token view: N tokens; sentence views: one point per text (FakeDataset has 60)
         assert (g.n_points == (300 if v == "token" else 60)).all()
@@ -147,7 +148,29 @@ def test_layout_pca3d_points_and_plots(tmp_path, plot):
             assert proj["coords"].shape == (n_layers, n, 3)
             assert proj["var_ratio"].shape == (n_layers, 3) and proj["spread"].shape == (n_layers,)
             assert np.isfinite(proj["coords"]).all() and (proj["var_ratio"].sum(1) <= 1 + 1e-6).all()
+            assert proj["layer_names"][-1].endswith("(after final norm)")     # tiny Llama has a final norm
         with safe_open(folder / view / "points.safetensors", "pt") as f:
             assert f.get_slice("points")[n_layers - 1].shape[0] == n      # one layer loads on its own
         assert (folder / view / "metrics.png").exists() == plot
         assert (folder / view / "pca3d.png").exists() == plot
+
+
+def test_final_norm_split():
+    # Llama has a norm after its last layer: L+2 hidden states, the last = norm(the one before it)
+    llama = load_model(TINY["tiny-llama"], "cpu")
+    assert llama.final_norm == "norm"
+    ids = llama.tokenizer("the cat sleeps under the tree", return_tensors="pt")["input_ids"]
+    with torch.inference_mode():
+        hs = llama.hidden_states(ids, torch.ones_like(ids))
+        torch.testing.assert_close(llama.model.norm(hs[-2]), hs[-1])
+    n_layers = llama.model.config.num_hidden_layers
+    assert len(hs) == n_layers + 2 and not torch.equal(hs[-2], hs[-1])
+    names = llama.layer_names(len(hs))
+    assert names[0] == "embeddings" and names[-2:] == [f"layer {n_layers} (before final norm)",
+                                                         f"layer {n_layers} (after final norm)"]
+    # BERT (post-LN inside each layer) has no final norm: L+1 hidden states
+    bert = load_model(TINY["tiny-st"], "cpu")
+    with torch.inference_mode():
+        hs = bert.hidden_states(ids.clamp(max=bert.tokenizer.vocab_size - 1), torch.ones_like(ids))
+    assert bert.final_norm is None and len(hs) == bert.model.config.num_hidden_layers + 1
+    assert bert.layer_names(len(hs))[-1] == f"layer {len(hs) - 1}"

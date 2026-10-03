@@ -1,0 +1,86 @@
+===== embeddinggemma-300m  (google/embeddinggemma-300m, family=sentence_transformer) =====
+
+Backbone class: transformers.models.gemma3.modeling_gemma3.Gemma3TextModel
+Config class:   Gemma3TextConfig
+Tokenizer:      GemmaTokenizer
+dtype: torch.float32, device: cuda:0
+
+Gemma3TextModel(
+  (embed_tokens): Gemma3TextScaledWordEmbedding(262144, 768, padding_idx=0)
+  (layers): ModuleList(
+    (0-23): 24 x Gemma3DecoderLayer(
+      (self_attn): Gemma3Attention(
+        (q_proj): Linear(in_features=768, out_features=768, bias=False)
+        (k_proj): Linear(in_features=768, out_features=256, bias=False)
+        (v_proj): Linear(in_features=768, out_features=256, bias=False)
+        (o_proj): Linear(in_features=768, out_features=768, bias=False)
+        (q_norm): Gemma3RMSNorm((256,), eps=1e-06)
+        (k_norm): Gemma3RMSNorm((256,), eps=1e-06)
+      )
+      (mlp): Gemma3MLP(
+        (gate_proj): Linear(in_features=768, out_features=1152, bias=False)
+        (up_proj): Linear(in_features=768, out_features=1152, bias=False)
+        (down_proj): Linear(in_features=1152, out_features=768, bias=False)
+        (act_fn): GELUTanh()
+      )
+      (input_layernorm): Gemma3RMSNorm((768,), eps=1e-06)
+      (post_attention_layernorm): Gemma3RMSNorm((768,), eps=1e-06)
+      (pre_feedforward_layernorm): Gemma3RMSNorm((768,), eps=1e-06)
+      (post_feedforward_layernorm): Gemma3RMSNorm((768,), eps=1e-06)
+    )
+  )
+  (norm): Gemma3RMSNorm((768,), eps=1e-06)
+  (rotary_emb): Gemma3RotaryEmbedding()
+)
+
+Distinct module classes:
+  GELUTanh
+  Gemma3Attention
+  Gemma3DecoderLayer
+  Gemma3MLP
+  Gemma3RMSNorm
+  Gemma3RotaryEmbedding
+  Gemma3TextModel
+  Gemma3TextScaledWordEmbedding
+  Linear
+  ModuleList
+
+Input: 'Hello, how are you?'
+hidden states: 25 (tied) / 25 (untied), shape per layer (1, 8, 768)  [batch, seq_len, hidden]
+
+layer | equal |   max |diff| |  mean |diff| |    min cos |   mean cos
+------------------------------------------------------------------------
+    0 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    1 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    2 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    3 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    4 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    5 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    6 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    7 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    8 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    9 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   10 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   11 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   12 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   13 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   14 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   15 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   16 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   17 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   18 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   19 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   20 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   21 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   22 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   23 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   24 | False | 107500.109375 |   360.149689 |   0.265306 |   0.312637
+
+tied[-1] == last_hidden_state exactly?   True
+untied[-1] == last_hidden_state exactly? False
+
+----- Final norm check -----
+Final norm module:   norm -> Gemma3RMSNorm((768,), eps=1e-06)
+Gemma3TextModel.forward calls self.norm(...)? True
+norm(untied[-1]) == last_hidden_state exactly? True
+max |norm(untied[-1]) - last_hidden_state|:    0.000000

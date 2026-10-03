@@ -5,6 +5,9 @@
   "dataset": "in22-gen",
   "max_texts": null,
   "n_tokens": 16000,
+  "token_sampling": "all texts run; n_tokens drawn uniformly from all tokens",
+  "pooling": "mean / last over non-special tokens",
+  "final_norm": "last layer saved before and after the final norm",
   "seed": 0,
   "metrics": [
     "isoscore",
@@ -22,7 +25,7 @@
   },
   "versions": {
     "torch": "2.10.0+cu128",
-    "transformers": "5.0.0",
+    "transformers": "5.18.0",
     "sentence-transformers": "5.4.1",
     "datasets": "5.0.0"
   }

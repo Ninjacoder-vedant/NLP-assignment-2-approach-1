@@ -76,9 +76,10 @@ class HiddenStateExtractor:
             token_idx: sorted, unique positions in the combined token matrix of all texts to keep for the
                 token view; None = keep every token.
         Returns:
-            {"token": [L+1, N, d] in the model's dtype (N = len(token_idx) or all tokens),
-             "sentence-mean": [L+1, n_texts, d] float32, "sentence-last": [L+1, n_texts, d] float32},
-            all on the CPU; layer 0 = embedding output.
+            {"token": [H, N, d] in the model's dtype (N = len(token_idx) or all tokens),
+             "sentence-mean": [H, n_texts, d] float32, "sentence-last": [H, n_texts, d] float32},
+            all on the CPU; H = len(model.hidden_states(...)): L+1, or L+2 when the model has a final norm
+            (last layer before and after it, see ModelWrapper.layer_names); layer 0 = embedding output.
         Raises ValueError if a text keeps no token, FloatingPointError if any value is inf/NaN.
         """
         # Get the tokenizer and device
