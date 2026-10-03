@@ -1,6 +1,6 @@
 {
-  "model": "qwen3-embedding-0.6b",
-  "hf_id": "Qwen/Qwen3-Embedding-0.6B",
+  "model": "qwen3.5-0.8b-base",
+  "hf_id": "Qwen/Qwen3.5-0.8B-Base",
   "dtype": "torch.float32",
   "dataset": "in22-gen",
   "max_texts": null,

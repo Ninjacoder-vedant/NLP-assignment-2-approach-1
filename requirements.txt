@@ -14,6 +14,13 @@ datasets>=3.0
 huggingface_hub>=0.34
 python-dotenv>=1.0
 
+# Fast kernels for Qwen3.5's linear-attention (GatedDeltaNet) layers; without them transformers falls back
+# to a much slower pure-PyTorch implementation (same results). GPU only.
+flash-linear-attention>=0.5.2
+# Compiled CUDA extension: needs nvcc and torch already installed, so install it on its own with
+#   pip install causal-conv1d --no-build-isolation
+causal-conv1d>=1.7.0
+
 # Isotropy metric
 IsoScore
 
