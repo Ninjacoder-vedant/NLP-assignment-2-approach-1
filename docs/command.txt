@@ -1,0 +1,6 @@
+models:   embeddinggemma-300m qwen3-embedding-0.6b harrier-oss-v1-0.6b gemma-3-1b-pt llama-3.2-1b qwen3.5-0.8b-base 
+datasets: in22-gen in22-conv flores-plus sangraha-verified wikipedia indiccorp-v2 iitb-indicmonodoc 
+metrics:  isoscore mev avgcos id
+
+# To run for all languages and particular model
+python run.py --models {model_name} --datasets in22-gen  --n-tokens 16000 --english --plot --overwrite
