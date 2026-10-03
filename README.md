@@ -10,7 +10,7 @@ Language models turn text into vectors—lists of numbers that capture informati
 
 ## What the experiment does
 
-The program reads text from a selected dataset, sends it through a selected model, and collects vectors for sampled tokens at each layer. It then calculates four measurements: IsoScore estimates how evenly variance is spread, average cosine similarity checks how similarly vectors from different texts point, maximum explainable variance reports how much variance lies along the strongest direction, and intrinsic dimension estimates how many dimensions are meaningfully used. Results are saved so an interrupted run can continue without repeating finished language-and-dataset combinations.
+The program reads text from a selected dataset, sends every text through a selected model, and looks at three kinds of vectors at each layer: individual tokens (all of them, or `--n-tokens` drawn at random from all tokens of the language), and one vector per sentence made by averaging its tokens (mean pooling) or by taking its last token (last-token pooling). The random tokens are chosen before inference and gathered while the model runs, so the full token matrix is never held in memory. It then calculates four measurements: IsoScore estimates how evenly variance is spread, average cosine similarity checks how similarly vectors from different texts point, maximum explainable variance reports how much variance lies along the strongest direction, and intrinsic dimension estimates how many dimensions are meaningfully used. Results are saved so an interrupted run can continue without repeating finished language-and-dataset combinations.
 
 The project uses seven datasets: IN22-Gen, IN22-Conv, FLORES+, Sangraha Verified, IndicCorp v2, Wikipedia, and IITB IndicMonoDoc. Some align the same content across languages; others contain text in individual languages. The six configured models are EmbeddingGemma, Qwen3-Embedding, Harrier, Gemma 3, Llama 3.2, and Qwen3.5. Language coverage differs by dataset. Use `python run.py --list` to see the exact names accepted by the program.
 
@@ -39,7 +39,20 @@ Some models or datasets require Hugging Face account approval. Accept the model 
 
 ## Where results go
 
-The experiment writes one CSV for each model, dataset, and language under `results/`. Each CSV contains one row per model layer and the measurements for that layer. Run settings and token counts are saved alongside the CSVs, together with a 3-D PCA projection of every layer's tokens (`pca3d/{lang}.npz`). Add `--plot` to also draw the metrics against depth (`plots/{lang}.png`) and one 3-D scatter per layer (`plots/pca3d/{lang}.png`); `python plotting.py` redraws them from saved results. Re-running the same command skips results already completed with matching settings.
+Results go under `results/`, one folder per model, dataset, and language:
+
+```
+results/{model}/{dataset}/
+  run_config.json          settings that produced the numbers
+  token_stats.csv          tokens, words, and fertility per language
+  {lang}/
+    metrics.csv            one row per (view, layer); view = token | sentence-mean | sentence-last
+    token/                 pca3d.npz, metrics.png, pca3d.png, points.safetensors
+    sentence-mean/         same files
+    sentence-last/         same files
+```
+
+`pca3d.npz` (a 3-D PCA projection of every layer) is always saved. Add `--plot` to also draw the metrics against depth (`metrics.png`) and one 3-D scatter per layer (`pca3d.png`); `python plotting.py` redraws them from saved results. `--save-points` also keeps the vectors themselves as `points.safetensors`, in the model's own precision. Re-running the same command skips languages already completed with matching settings.
 
 To check that model loading and inference work without starting a dataset experiment, run:
 
