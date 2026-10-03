@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 import dataset_loader  # noqa: F401  (registers datasets)
-from inference import HiddenStateExtractor
+from inference import HiddenStateExtractor, pick_texts
 from isotropy_metrics import build_metrics, compute_layer
 from languages import ENGLISH, LANGUAGES
 from model_loader import MODEL_SPECS, load_model, resolve_dtype
@@ -40,9 +40,10 @@ class RunConfig:
     models: list[str] = field(default_factory=lambda: list(MODEL_SPECS))
     datasets: list[str] = field(default_factory=lambda: DATASETS.names())
     langs: list[str] = field(default_factory=lambda: list(LANGUAGES))
-    # None (default) = no sampling: use every collected token of each language.
-    # An int N = sample the same N for every language, dataset and model (IsoScore depends on N);
-    # languages with fewer tokens are then skipped and logged in token_stats.csv.
+    # None (default) = no sampling: run every text and use every token of each language.
+    # An int N = the same N for every language, dataset and model (IsoScore depends on N): random whole
+    # texts are run until they hold >= N tokens, then exactly N of their tokens are sampled. Languages
+    # with fewer than N tokens in total are skipped and logged in token_stats.csv.
     n_tokens: int | None = None
     batch_size: int = 32                  # texts per forward pass
     # How many texts to take from monolingual corpora (parallel datasets use all rows)
@@ -108,6 +109,8 @@ class Experiment:
             "dataset": ds.name,
             "max_texts": ds.max_texts, 
             "n_tokens": c.n_tokens, 
+            # How the N tokens are drawn (changes the numbers, so a change needs --overwrite)
+            "token_sampling": None if c.n_tokens is None else "random texts until >= n_tokens, then n_tokens tokens",
             "seed": c.seed,
             "metrics": c.metrics, 
             "metric_params": {m: c.metric_params.get(m, {}) for m in c.metrics},
@@ -183,9 +186,10 @@ class Experiment:
             ext: extractor wrapping the loaded model.
             ds: the dataset object.
             langs: canonical language codes still to compute.
-        Writes one {lang}.csv per language and updates token_stats.csv. With n_tokens set, languages
-        with fewer than n_tokens tokens are skipped and recorded as such; with n_tokens=None every
-        token is used (no sampling).
+        Writes one {lang}.csv per language and updates token_stats.csv. With n_tokens set, only random
+        whole texts holding >= n_tokens tokens are run, then exactly n_tokens of their tokens are used;
+        languages with fewer than n_tokens tokens are skipped and recorded as such. With n_tokens=None
+        every text is run and every token used (no sampling).
         """
         n = self.cfg.n_tokens
         stats = []
@@ -194,27 +198,37 @@ class Experiment:
             # Load the language dataset and run the model over every text
             log.info("%s (%d/%d) loading texts...", tag, i_lang, len(langs))
             texts = ds.load(lang)
-            log.info("%s loaded %d texts  running inference...", tag, len(texts))
-            layers = ext.extract(texts)
-            # Token statistics for token_stats.csv (fertility = tokens per word, words split on whitespace)
-            n_real, n_words = len(layers[0]), sum(len(t.split()) for t in texts)
+            # Token statistics for token_stats.csv, from the tokenizer alone (fertility = tokens per word,
+            # words split on whitespace)
+            counts = ext.count_tokens(texts)
+            n_real, n_words = int(counts.sum()), sum(len(t.split()) for t in texts)
             stat = {"lang": lang, "source_code": ds.source_code(lang), "n_texts": len(texts),
                     "n_words": n_words, "n_tokens": n_real, "fertility": n_real / max(n_words, 1),
                     "status": "done"}
             stats.append(stat)
-            # Too few tokens to sample N: skip instead of lowering N for everyone
+            # Too few tokens to sample N: skip (before any inference) instead of lowering N for everyone
             if n is not None and n_real < n:
                 stat["status"] = f"skipped: {n_real} tokens < n_tokens={n}"
                 log.warning("%s %s", tag, stat["status"])
                 continue
-            # Seed depends only on (seed, dataset, language): a resumed run samples the same tokens.
+            # Seed depends only on (seed, dataset, language): a resumed run picks the same texts and tokens.
             # crc32 is a stable hash (Python's hash() changes between runs)
             rng = np.random.default_rng([self.cfg.seed, zlib.crc32(f"{ds.name}/{lang}".encode())])
+            if n is not None:
+                # Only whole texts go through the model, so each token keeps its sentence context
+                idx = pick_texts(counts, n, rng)
+                texts = [texts[i] for i in idx]
+                log.info("%s picked %d of %d texts (%d of %d tokens) for n_tokens=%d", tag, len(texts),
+                         stat["n_texts"], int(counts[idx].sum()), n_real, n)
+            stat["n_texts_used"] = len(texts)
+            log.info("%s loaded %d texts  running inference...", tag, len(texts))
+            layers = ext.extract(texts)
+            stat["n_tokens_used"] = len(layers[0])
             # Same N tokens at every layer; points has shape [layers+1, N, d]
             if n is None:
-                log.info("%s using all %d tokens (no sampling)", tag, n_real)
+                log.info("%s using all %d tokens (no sampling)", tag, len(layers[0]))
             else:
-                log.info("%s sampling %d of %d tokens", tag, n, n_real)
+                log.info("%s sampling %d of %d tokens", tag, n, len(layers[0]))
             points = ext.sample(layers, n, rng)
             del layers
             n_layers, d = points.shape[0], points.shape[-1]
@@ -259,7 +273,8 @@ def parse_args() -> RunConfig:
     p.add_argument("--english", action="store_true", help="also run eng_Latn as a baseline")
     p.add_argument("--metrics", nargs="+", default=d.metrics, choices=METRICS.names())
     p.add_argument("--n-tokens", type=int, default=d.n_tokens,
-                   help="sample this many tokens per language (default: no sampling, use all tokens)")
+                   help="run random whole texts until they hold this many tokens, then sample exactly this "
+                        "many of their tokens (default: no sampling, use all tokens)")
     p.add_argument("--batch-size", type=int, default=d.batch_size, help="texts per forward pass")
     p.add_argument("--max-texts-sentence", type=int, default=d.max_texts["sentence"])
     p.add_argument("--max-texts-document", type=int, default=d.max_texts["document"])

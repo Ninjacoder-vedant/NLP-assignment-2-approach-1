@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from dataset_loader import BaseDataset
-from inference import HiddenStateExtractor
+from inference import HiddenStateExtractor, pick_texts
 from model_loader import ModelSpec, load_model
 from registry import DATASETS
 from results import ConfigMismatch
@@ -54,6 +54,8 @@ def test_extracted_points_match_unbatched_forward(key):
                 ref[layer].append(h[0, keep])
     for layer, h in enumerate(layers):
         torch.testing.assert_close(h.float(), torch.cat(ref[layer]).float(), atol=1e-4, rtol=1e-4)
+    # count_tokens (tokenizer only) predicts exactly how many tokens extract() keeps per text
+    assert ext.count_tokens(texts).tolist() == [len(r) for r in ref[0]]
     # sample() picks the same tokens at every layer
     points = ext.sample(layers, 50, np.random.default_rng(0))
     assert points.shape == (len(layers), 50, layers[0].shape[1])
@@ -127,3 +129,23 @@ def test_pca3d_saved_always_and_plotted_with_flag(tmp_path, plot):
         assert proj["var_ratio"].shape == (n_layers, 3) and proj["spread"].shape == (n_layers,)
         assert np.isfinite(proj["coords"]).all() and (proj["var_ratio"].sum(1) <= 1 + 1e-6).all()
     assert (folder / "plots" / "pca3d" / "hin_Deva.png").exists() == plot
+
+
+def test_pick_texts_stops_as_soon_as_budget_is_reached():
+    counts = np.random.default_rng(1).integers(1, 40, size=200)
+    for n in (1, 37, 500, int(counts.sum())):
+        idx = pick_texts(counts, n, np.random.default_rng(0))
+        assert (np.diff(idx) > 0).all() and counts[idx].sum() >= n
+        # The last text drawn is the one that crossed the budget: without it there are fewer than n tokens
+        order = np.random.default_rng(0).permutation(len(counts))
+        assert counts[idx].sum() - counts[order[len(idx) - 1]] < n
+        np.testing.assert_array_equal(idx, pick_texts(counts, n, np.random.default_rng(0)))   # reproducible
+
+
+def test_only_picked_texts_are_run(tmp_path):
+    cfg = runner.RunConfig(models=["tiny-llama"], datasets=["fake"], langs=["hin_Deva"], n_tokens=300,
+                           device="cpu", out_dir=str(tmp_path / "res"), cache_dir=str(tmp_path / "cache"))
+    runner.Experiment(cfg).run()
+    stats = pd.read_csv(tmp_path / "res" / "tiny-llama" / "fake" / "token_stats.csv").iloc[0]
+    assert stats.status == "done" and stats.n_texts_used < stats.n_texts
+    assert 300 <= stats.n_tokens_used < stats.n_tokens
