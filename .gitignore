@@ -16,6 +16,7 @@ doubts.md
 .env.*.local
 .claude-flow/
 .swarm/
+ruvector.db*
 .agents/
 .mcp.json
 AGENTS.md
