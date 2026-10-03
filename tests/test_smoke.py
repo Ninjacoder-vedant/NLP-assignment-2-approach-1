@@ -3,9 +3,10 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from safetensors import safe_open
 
 from dataset_loader import BaseDataset
-from inference import HiddenStateExtractor, pick_texts
+from inference import VIEWS, HiddenStateExtractor
 from model_loader import ModelSpec, load_model
 from registry import DATASETS
 from results import ConfigMismatch
@@ -37,32 +38,47 @@ def tiny_models(monkeypatch):
         monkeypatch.setitem(runner.MODEL_SPECS, k, v)
 
 
-@pytest.mark.parametrize("key", list(TINY))
-def test_extracted_points_match_unbatched_forward(key):
-    model = load_model(TINY[key], "cpu")
-    ext = HiddenStateExtractor(model, batch_size=3)   # several padded batches
-    texts = list(FakeDataset(cache_dir="/nonexistent")._iter_texts("hin_Deva"))[:20]
-    layers = ext.extract(texts)
-    # Unbatched reference: hidden states of every non-special token of every text, in order
+def unbatched_reference(model, texts):
+    """Per text and layer: [n_kept, d] hidden states of its non-special tokens, from one unpadded forward each."""
     special = torch.tensor(sorted(model.special_ids))
-    ref = [[] for _ in layers]
+    ref = []
     with torch.inference_mode():
         for t in texts:
             ids = model.tokenizer(t, return_tensors="pt")["input_ids"]
             keep = ~torch.isin(ids[0], special)
-            for layer, h in enumerate(model.hidden_states(ids, torch.ones_like(ids))):
-                ref[layer].append(h[0, keep])
-    for layer, h in enumerate(layers):
-        torch.testing.assert_close(h.float(), torch.cat(ref[layer]).float(), atol=1e-4, rtol=1e-4)
-    # count_tokens (tokenizer only) predicts exactly how many tokens extract() keeps per text
-    assert ext.count_tokens(texts).tolist() == [len(r) for r in ref[0]]
-    # sample() picks the same tokens at every layer
-    points = ext.sample(layers, 50, np.random.default_rng(0))
-    assert points.shape == (len(layers), 50, layers[0].shape[1])
-    for p in range(0, 50, 7):
-        q = int((layers[-1].float() - points[-1, p]).abs().sum(1).argmin())
-        for layer, h in enumerate(layers):
-            torch.testing.assert_close(points[layer, p], h[q].float())
+            ref.append([h[0, keep].float() for h in model.hidden_states(ids, torch.ones_like(ids))])
+    return ref
+
+
+@pytest.mark.parametrize("key", list(TINY))
+def test_extracted_views_match_unbatched_forward(key):
+    model = load_model(TINY[key], "cpu")
+    ext = HiddenStateExtractor(model, batch_size=3)   # several padded batches
+    texts = list(FakeDataset(cache_dir="/nonexistent")._iter_texts("hin_Deva"))[:20]
+    ref = unbatched_reference(model, texts)
+    n_layers = len(ref[0])
+    # count_tokens (tokenizer only) predicts exactly how many tokens extract() sees per text
+    assert ext.count_tokens(texts).tolist() == [len(r[0]) for r in ref]
+    # Token view without indices = every token, in text order
+    views = ext.extract(texts)
+    assert set(views) == set(VIEWS)
+    for layer in range(n_layers):
+        all_tok = torch.cat([r[layer] for r in ref])
+        torch.testing.assert_close(views["token"][layer].float(), all_tok, atol=1e-4, rtol=1e-4)
+        # Sentence views: mean of each text's tokens, and its last token
+        torch.testing.assert_close(views["sentence-mean"][layer], torch.stack([r[layer].mean(0) for r in ref]),
+                                   atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(views["sentence-last"][layer], torch.stack([r[layer][-1] for r in ref]),
+                                   atol=1e-4, rtol=1e-4)
+    # Token view with indices = exactly those rows of the combined token matrix, the same at every layer
+    idx = np.sort(np.random.default_rng(0).choice(len(views["token"][0]), 50, replace=False))
+    picked = ext.extract(texts, idx)
+    assert picked["token"].shape == (n_layers, 50, views["token"].shape[-1])
+    torch.testing.assert_close(picked["token"], views["token"][:, idx])
+    torch.testing.assert_close(picked["sentence-mean"], views["sentence-mean"])
+    # Indices beyond the combined matrix are an error, not silently fewer tokens
+    with pytest.raises(RuntimeError):
+        ext.extract(texts, np.array([len(views["token"][0])]))
 
 
 def test_run_resume_and_config_guard(tmp_path):
@@ -71,16 +87,19 @@ def test_run_resume_and_config_guard(tmp_path):
     runner.Experiment(cfg).run()
     df = runner.ResultStore(cfg.out_dir).load_all()
     assert set(df.model) == set(TINY) and set(df.lang) == {"hin_Deva", "tam_Taml", "tel_Telu"}
-    for (m, l), g in df.groupby(["model", "lang"]):
+    assert set(df.view) == set(VIEWS)
+    for (m, l, v), g in df.groupby(["model", "lang", "view"]):
         assert sorted(g.layer) == list(range(len(g)))                   # embeddings + every layer
         assert g[["isoscore", "mev", "avg_cos"]].notna().all().all()
-        # ID is NaN only where there are too few distinct points (layer 0 of a 15-word vocabulary)
-        assert (g.id_mle.notna() | (g.id_n_unique <= 20)).all() and g.id_mle.iloc[1:].notna().all()
-        assert (g.n_tokens == 300).all()
+        # Token view: N tokens; sentence views: one point per text (FakeDataset has 60)
+        assert (g.n_points == (300 if v == "token" else 60)).all()
+    tok = df[df.view == "token"]
+    # ID is NaN only where there are too few distinct points (layer 0 of a 15-word vocabulary)
+    assert (tok.id_mle.notna() | (tok.id_n_unique <= 20)).all() and tok[tok.layer > 0].id_mle.notna().all()
     stats = pd.read_csv(tmp_path / "res" / "tiny-llama" / "fake" / "token_stats.csv")
-    assert (stats.status == "done").all()
+    assert (stats.status == "done").all() and (stats.n_tokens_used == 300).all()
 
-    files = sorted((tmp_path / "res").glob("*/*/*_*.csv"))
+    files = sorted((tmp_path / "res").glob("*/*/*/metrics.csv"))
     mtimes = [f.stat().st_mtime_ns for f in files]
     runner.Experiment(cfg).run()                                        # resume: nothing recomputed
     assert [f.stat().st_mtime_ns for f in files] == mtimes
@@ -93,7 +112,7 @@ def test_run_resume_and_config_guard(tmp_path):
         runner.Experiment(changed).run()
     runner.Experiment(runner.dataclasses.replace(changed, overwrite=True)).run()
     df = runner.ResultStore(cfg.out_dir).load_all()
-    assert (df.n_tokens == 200).all() and set(df.lang) == {"hin_Deva", "tam_Taml", "tel_Telu"}
+    assert (df[df.view == "token"].n_points == 200).all() and set(df.lang) == {"hin_Deva", "tam_Taml", "tel_Telu"}
 
 
 def test_language_with_too_few_tokens_is_skipped(tmp_path):
@@ -112,38 +131,23 @@ def test_no_n_tokens_uses_all_tokens(tmp_path):
     stats = pd.read_csv(tmp_path / "res" / "tiny-llama" / "fake" / "token_stats.csv")
     df = runner.ResultStore(cfg.out_dir).load_all()
     assert (stats.status == "done").all() and not df.empty
-    assert (df.n_tokens == stats.n_tokens[0]).all()
+    assert (df[df.view == "token"].n_points == stats.n_tokens[0]).all()
 
 
 @pytest.mark.parametrize("plot", [False, True])
-def test_pca3d_saved_always_and_plotted_with_flag(tmp_path, plot):
+def test_layout_pca3d_points_and_plots(tmp_path, plot):
     cfg = runner.RunConfig(models=["tiny-llama"], datasets=["fake"], langs=["hin_Deva"], n_tokens=300, plot=plot,
-                           device="cpu", out_dir=str(tmp_path / "res"), cache_dir=str(tmp_path / "cache"))
+                           save_points=True, device="cpu", out_dir=str(tmp_path / "res"),
+                           cache_dir=str(tmp_path / "cache"))
     runner.Experiment(cfg).run()
-    folder = tmp_path / "res" / "tiny-llama" / "fake"
-    n_layers = len(pd.read_csv(folder / "hin_Deva.csv"))
-    with np.load(folder / "pca3d" / "hin_Deva.npz") as proj:
-        assert proj["coords"].shape == (n_layers, 300, 3)
-        assert proj["var_ratio"].shape == (n_layers, 3) and proj["spread"].shape == (n_layers,)
-        assert np.isfinite(proj["coords"]).all() and (proj["var_ratio"].sum(1) <= 1 + 1e-6).all()
-    assert (folder / "plots" / "pca3d" / "hin_Deva.png").exists() == plot
-
-
-def test_pick_texts_stops_as_soon_as_budget_is_reached():
-    counts = np.random.default_rng(1).integers(1, 40, size=200)
-    for n in (1, 37, 500, int(counts.sum())):
-        idx = pick_texts(counts, n, np.random.default_rng(0))
-        assert (np.diff(idx) > 0).all() and counts[idx].sum() >= n
-        # The last text drawn is the one that crossed the budget: without it there are fewer than n tokens
-        order = np.random.default_rng(0).permutation(len(counts))
-        assert counts[idx].sum() - counts[order[len(idx) - 1]] < n
-        np.testing.assert_array_equal(idx, pick_texts(counts, n, np.random.default_rng(0)))   # reproducible
-
-
-def test_only_picked_texts_are_run(tmp_path):
-    cfg = runner.RunConfig(models=["tiny-llama"], datasets=["fake"], langs=["hin_Deva"], n_tokens=300,
-                           device="cpu", out_dir=str(tmp_path / "res"), cache_dir=str(tmp_path / "cache"))
-    runner.Experiment(cfg).run()
-    stats = pd.read_csv(tmp_path / "res" / "tiny-llama" / "fake" / "token_stats.csv").iloc[0]
-    assert stats.status == "done" and stats.n_texts_used < stats.n_texts
-    assert 300 <= stats.n_tokens_used < stats.n_tokens
+    folder = tmp_path / "res" / "tiny-llama" / "fake" / "hin_Deva"
+    n_layers = len(pd.read_csv(folder / "metrics.csv").query("view == 'token'"))
+    for view, n in (("token", 300), ("sentence-mean", 60), ("sentence-last", 60)):
+        with np.load(folder / view / "pca3d.npz") as proj:
+            assert proj["coords"].shape == (n_layers, n, 3)
+            assert proj["var_ratio"].shape == (n_layers, 3) and proj["spread"].shape == (n_layers,)
+            assert np.isfinite(proj["coords"]).all() and (proj["var_ratio"].sum(1) <= 1 + 1e-6).all()
+        with safe_open(folder / view / "points.safetensors", "pt") as f:
+            assert f.get_slice("points")[n_layers - 1].shape[0] == n      # one layer loads on its own
+        assert (folder / view / "metrics.png").exists() == plot
+        assert (folder / view / "pca3d.png").exists() == plot

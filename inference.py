@@ -1,8 +1,16 @@
 """Hidden-state extraction for one language.
 
-With a token budget N: count every text's tokens (tokenizer only), pick random whole texts until they hold
->= N tokens, run the model on just those texts (so every token keeps its full sentence context), then pick
-exactly N of their tokens, the same N at every layer. Without a budget: every token of every text."""
+Every text runs through the model whole, so every token keeps its full sentence context. Each batch's
+hidden states are reduced on the spot to three views, and the full token matrix is never kept:
+
+    token          the tokens at the given global indices (the same ones at every layer), or all tokens.
+                   Indices refer to the combined token matrix of all texts (text order, then token order),
+                   whose size count_tokens() gives before any forward pass, so drawing them up front equals
+                   sampling the full matrix after inference
+    sentence-mean  mean of each text's tokens
+    sentence-last  each text's last token
+
+Pooling uses the same tokens as the token view: real (not padding) and not special."""
 import logging
 import math
 
@@ -13,6 +21,9 @@ from model_loader import ModelWrapper
 
 # Child of run.py's "isotropy" logger, so --debug there also turns on these batch lines
 log = logging.getLogger("isotropy.inference")
+
+# Names of the views extract() returns (also the results folder names)
+VIEWS = ("token", "sentence-mean", "sentence-last")
 
 
 class HiddenStateExtractor:
@@ -33,7 +44,7 @@ class HiddenStateExtractor:
         return self.model.tokenizer(texts, truncation=True, max_length=self.model.max_length, **kwargs)
 
     def count_tokens(self, texts: list[str]) -> np.ndarray:
-        """Number of tokens extract() would keep for each text (tokenizer only, no forward pass).
+        """Number of tokens extract() keeps for each text (tokenizer only, no forward pass).
 
         Args:
             texts: texts of one language.
@@ -46,75 +57,71 @@ class HiddenStateExtractor:
 
     # No gradients / autograd bookkeeping: faster and uses less memory
     @torch.inference_mode()
-    def extract(self, texts: list[str]) -> list[torch.Tensor]:
-        """Run every text through the model and collect the hidden states of all its non-special tokens.
+    def extract(self, texts: list[str], token_idx: np.ndarray | None = None) -> dict[str, torch.Tensor]:
+        """Run every text through the model and reduce each batch to the token and sentence views.
 
         Args:
-            texts: texts of one language; each row is one model input.
+            texts: texts of one language; each row is one model input and must keep >= 1 token.
+            token_idx: sorted, unique positions in the combined token matrix of all texts to keep for the
+                token view; None = keep every token.
         Returns:
-            One [n_tokens, d] tensor per layer (index 0 = embedding output), on the CPU in the model's
-            dtype. Rows follow the texts in order, and token order within each text.
+            {"token": [L+1, N, d] in the model's dtype (N = len(token_idx) or all tokens),
+             "sentence-mean": [L+1, n_texts, d] float32, "sentence-last": [L+1, n_texts, d] float32},
+            all on the CPU; layer 0 = embedding output.
+        Raises ValueError if a text keeps no token, FloatingPointError if any value is inf/NaN.
         """
         tok, dev = self.model.tokenizer, self.model.device
         n_batches = math.ceil(len(texts) / self.batch_size)
-        layers = None
+        n_keep = len(token_idx) if token_idx is not None else int(self.count_tokens(texts).sum())
+        idx = None if token_idx is None else torch.as_tensor(token_idx, dtype=torch.long)
+        out = None
+        # off = global position of the batch's first token; w = token-view rows written so far
+        off = w = 0
         for b in range(n_batches):
-            batch = texts[b * self.batch_size:(b + 1) * self.batch_size]
+            r = b * self.batch_size
+            batch = texts[r:r + self.batch_size]
             # Batch encode: pad to the longest text of the batch. Right padding keeps the positions of
             # real tokens the same as in an unbatched run; truncation only at the model's own limit
             enc = self._encode(batch, padding=True, padding_side="right", return_tensors="pt")
             ids, att = enc["input_ids"], enc["attention_mask"]
-            # Tokens whose vectors are kept: real (not padding) and not special
+            # Tokens whose vectors are used: real (not padding) and not special
             keep = att.bool() & ~torch.isin(ids, self._special)
+            per_text = keep.sum(1)
+            if (per_text == 0).any():
+                raise ValueError(f"text {r + int((per_text == 0).nonzero()[0])} has no non-special token")
+            k = int(per_text.sum())
+            # Which of this batch's k kept tokens (global positions off..off+k-1) the token view keeps
+            pick = torch.ones(k, dtype=torch.bool) if idx is None else torch.isin(torch.arange(off, off + k), idx)
+            m = int(pick.sum())
             # Forward pass: a tuple with one [B, T, d] tensor per layer
             hs = self.model.hidden_states(ids.to(dev), att.to(dev))
-            if layers is None:
-                layers = [[] for _ in hs]
-            keep_dev = keep.to(dev)
-            # h[keep] -> [k, d]: the kept tokens of all rows, row by row
+            if out is None:
+                # Preallocate once the layer count and width are known: only the kept rows are ever stored
+                L, d = len(hs), hs[0].shape[-1]
+                out = {"token": torch.empty(L, n_keep, d, dtype=hs[0].dtype),
+                       "sentence-mean": torch.empty(L, len(texts), d),
+                       "sentence-last": torch.empty(L, len(texts), d)}
+            keep_d, pick_d = keep.to(dev), pick.to(dev)
+            # [B, 1, T] float weights for the masked mean (bmm sums the kept tokens of each row)
+            weights = (keep_d.float() / per_text.to(dev)[:, None]).unsqueeze(1)
+            rows = torch.arange(len(batch), device=dev)
+            # Position of each row's last kept token
+            last = (keep * torch.arange(keep.shape[1])).argmax(1).to(dev)
             for layer, h in enumerate(hs):
-                layers[layer].append(h[keep_dev].cpu())
+                # h[keep] -> [k, d]: the kept tokens of all rows, row by row; then the picked ones
+                out["token"][layer, w:w + m] = h[keep_d][pick_d].cpu()
+                out["sentence-mean"][layer, r:r + len(batch)] = torch.bmm(weights, h.float()).squeeze(1).cpu()
+                out["sentence-last"][layer, r:r + len(batch)] = h[rows, last].float().cpu()
+            off, w = off + k, w + m
             if b == 0 and log.isEnabledFor(logging.DEBUG):
-                # Batch decode the kept tokens: shows exactly which tokens' vectors are collected
-                log.debug("kept tokens of batch 1: %s", tok.batch_decode([i[k].tolist() for i, k in zip(ids, keep)]))
-            log.debug("batch %d/%d: %d texts x %d tokens, %d kept", b + 1, n_batches, len(batch), ids.shape[1],
-                      int(keep.sum()))
-        return [torch.cat(h) for h in layers]
-
-    def sample(self, layers: list[torch.Tensor], n: int | None, rng: np.random.Generator) -> torch.Tensor:
-        """Pick n tokens uniformly at random (the same tokens at every layer), or all of them if n is None.
-
-        Args:
-            layers: output of extract().
-            n: number of tokens to keep (must be <= the number of collected tokens); None = keep all.
-            rng: seeded NumPy generator (same seed -> same tokens).
-        Returns:
-            points [L+1, n, d] float32 on the model's device (n = all collected tokens if n is None).
-        Raises FloatingPointError if any selected hidden state is inf/NaN.
-        """
-        if n is None:
-            points = torch.stack(layers).to(self.model.device).float()
-        else:
-            idx = torch.from_numpy(np.sort(rng.choice(len(layers[0]), size=n, replace=False)))
-            points = torch.stack([h[idx] for h in layers]).to(self.model.device).float()
+                # Batch decode the kept tokens: shows exactly which tokens' vectors are used
+                log.debug("kept tokens of batch 1: %s", tok.batch_decode([i[kp].tolist() for i, kp in zip(ids, keep)]))
+            log.debug("batch %d/%d: %d texts x %d tokens, %d kept, %d picked", b + 1, n_batches, len(batch),
+                      ids.shape[1], k, m)
+        # Every requested position was seen: the indices really refer to this combined token matrix
+        if w != n_keep:
+            raise RuntimeError(f"token view got {w} of {n_keep} tokens: token_idx beyond the {off} tokens")
         # No inf/NaN (e.g. from fp16 overflow)
-        if not torch.isfinite(points).all():
+        if not all(torch.isfinite(v).all() for v in out.values()):
             raise FloatingPointError("non-finite hidden states; try --dtype float32")
-        return points
-
-
-def pick_texts(counts: np.ndarray, n: int, rng: np.random.Generator) -> np.ndarray:
-    """Pick random whole texts until they hold at least n tokens.
-
-    Args:
-        counts: tokens per text (from count_tokens); must sum to >= n.
-        n: token budget.
-        rng: seeded NumPy generator (same seed -> same texts).
-    Returns:
-        Sorted indices of the picked texts (dataset order). Their tokens sum to >= n, and dropping the
-        last text drawn would leave fewer than n.
-    """
-    order = rng.permutation(len(counts))
-    # First position in the shuffled order where the running total reaches n
-    stop = int(np.searchsorted(np.cumsum(counts[order]), n)) + 1
-    return np.sort(order[:stop])
+        return out

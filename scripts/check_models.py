@@ -77,12 +77,11 @@ def main():
                     if not finite:
                         raise FloatingPointError("hidden states contain NaN or infinity")
                     extractor = HiddenStateExtractor(model, batch_size=1)
-                    collected = extractor.extract(texts)
-                    extracted_shape = None
-                    if len(collected[0]):
-                        # sample() raises FloatingPointError on NaN or infinity
-                        extracted = extractor.sample(collected, min(2, len(collected[0])), np.random.default_rng(0))
-                        extracted_shape = list(extracted.shape)
+                    # extract() raises FloatingPointError on NaN or infinity; token view keeps 2 random tokens
+                    n_total = int(extractor.count_tokens(texts).sum())
+                    token_idx = np.sort(np.random.default_rng(0).choice(n_total, min(2, n_total), replace=False))
+                    collected = extractor.extract(texts, token_idx)
+                    extracted_shape = {view: list(v.shape) for view, v in collected.items()}
                     for row, text in enumerate(texts):
                         length = int(encoded["attention_mask"][row].sum())
                         token_ids = encoded["input_ids"][row, :length].tolist()
@@ -105,7 +104,7 @@ def main():
                         records.write(json.dumps(result, ensure_ascii=False) + "\n")
                         records.flush()
                         logger.info(
-                            "%s INPUT %r | decoded %r | OUTPUT final-layer vector %s first8=%s | sampled hidden-state batch=%s",
+                            "%s INPUT %r | decoded %r | OUTPUT final-layer vector %s first8=%s | extract() view shapes=%s",
                             key, text, decoded, tuple(layers[-1][row, length - 1].shape), preview, extracted_shape,
                         )
                     logger.info("%s PASS layers=%d device=%s dtype=%s", key, len(layers), args.device, model.dtype)

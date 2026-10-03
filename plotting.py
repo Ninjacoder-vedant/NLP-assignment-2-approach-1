@@ -1,13 +1,15 @@
-"""Plots per (model, dataset, language):
+"""Plots per (model, dataset, language, view), next to the view's data:
 
-    {root}/{model}/{dataset}/plots/{lang}.png         layer depth vs every isotropy metric
-    {root}/{model}/{dataset}/plots/pca3d/{lang}.png   3-D PCA scatter of the tokens, one panel per layer
+    {root}/{model}/{dataset}/{lang}/{view}/metrics.png   layer depth vs every isotropy metric
+    {root}/{model}/{dataset}/{lang}/{view}/pca3d.png     3-D PCA scatter of the points, one panel per layer
+
+view = token | sentence-mean | sentence-last.
 
 Metrics plot: top panel = the bounded metrics (isoscore, mev, avg_cos, id_score) on one shared axis;
 bottom panel = id_mle, which is in dimensions rather than [0, 1], so it gets its own axis.
 
-3-D plot: drawn from {root}/{model}/{dataset}/pca3d/{lang}.npz, which run.py writes for every language
-(with or without --plot) using project_3d().
+3-D plot: drawn from {lang}/{view}/pca3d.npz, which run.py writes for every language and view (with or
+without --plot) using project_3d().
 
     python plotting.py                                    # plot every saved CSV
     python plotting.py --models gemma-3-1b-pt --datasets in22-gen --langs hin_Deva
@@ -46,7 +48,14 @@ INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e1e0d9"
 # 3-D panels: ordinary layers, the penultimate layer (N-1) and the final layer (N)
 LAYER_COLOR, PENULT_COLOR, FINAL_COLOR = "#2a78d6", "#e34948", "#1baf7a"
 PCA_COLS = 6              # panels per row of the 3-D figure
-PCA_MAX_SHOW = 5000       # tokens drawn per panel (display only; the .npz keeps all N)
+PCA_MAX_SHOW = 5000       # points drawn per panel (display only; the .npz keeps all N)
+
+# What the points of each view are: (plural unit, description for titles)
+VIEW_LABELS = {
+    "token": ("tokens", "token representations"),
+    "sentence-mean": ("sentences", "mean-pooled sentence embeddings"),
+    "sentence-last": ("sentences", "last-token sentence embeddings"),
+}
 
 
 def _style(ax) -> None:
@@ -61,10 +70,10 @@ def _style(ax) -> None:
 
 
 def plot_lang(df: pd.DataFrame, path: Path) -> None:
-    """Draw layer depth vs every isotropy metric of one (model, dataset, language) and save it.
+    """Draw layer depth vs every isotropy metric of one (model, dataset, language, view) and save it.
 
     Args:
-        df: the per-layer rows of one {lang}.csv.
+        df: the per-layer rows of one view of a metrics.csv.
         path: output .png file (parent folders are created).
     """
     df = df.sort_values("layer")
@@ -95,8 +104,9 @@ def plot_lang(df: pd.DataFrame, path: Path) -> None:
     bottom = axes[-1, 0]
     bottom.set_xlabel("layer (0 = embedding output)", color=MUTED)
     bottom.xaxis.set_major_locator(MaxNLocator(integer=True))
-    fig.suptitle(f"{row['model']} / {row['dataset']} / {row['lang']}   (N={row['n_tokens']}, d={row['d']})",
-                 color=INK, fontsize=11)
+    unit, what = VIEW_LABELS.get(row["view"], ("points", row["view"]))
+    fig.suptitle(f"{row['model']} / {row['dataset']} / {row['lang']}: {what}\n(N={row['n_points']} {unit}, "
+                 f"d={row['d']})", color=INK, fontsize=11)
     fig.tight_layout()
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,14 +116,15 @@ def plot_lang(df: pd.DataFrame, path: Path) -> None:
 
 # No gradients needed: this is pure linear algebra on saved activations
 @torch.inference_mode()
-def project_3d(points: torch.Tensor) -> dict[str, np.ndarray]:
-    """Project every layer's tokens onto that layer's first 3 principal axes.
+def project_3d(points: torch.Tensor, device: str | torch.device | None = None) -> dict[str, np.ndarray]:
+    """Project every layer's points onto that layer's first 3 principal axes.
 
-    Each token vector is scaled to unit length first (cosine geometry, the same view as avg_cos), so
+    Each vector is scaled to unit length first (cosine geometry, the same view as avg_cos), so
     layers with very different norms share one scale and can be drawn on the same axes.
 
     Args:
-        points: [L+1, N, d] hidden states (the same N tokens at every layer), on any device.
+        points: [L+1, N, d] hidden states (the same N points at every layer), on any device.
+        device: where to compute, one layer at a time (None = where points are).
     Returns:
         {"coords": [L+1, N, 3] float32 PC1-3 coordinates of the centred unit vectors,
          "var_ratio": [L+1, 3] share of the layer's total variance on PC1, PC2, PC3,
@@ -122,7 +133,7 @@ def project_3d(points: torch.Tensor) -> dict[str, np.ndarray]:
     """
     coords, var_ratio, spread = [], [], []
     for X in points:
-        Xc = F.normalize(X.float(), dim=1)
+        Xc = F.normalize(X.to(device).float(), dim=1)
         Xc = Xc - Xc.mean(0)
         # d x d covariance; eigh in float64 (ascending eigenvalues), clamp rounding negatives to 0
         cov = (Xc.T @ Xc).double() / max(len(Xc) - 1, 1)
@@ -153,7 +164,7 @@ def _layer_title(layer: int, last: int) -> tuple[str, str]:
     return (f"Layer {layer} (embeddings)" if layer == 0 else f"Layer {layer}"), LAYER_COLOR
 
 
-def plot_lang_3d(data, title: str, path: Path, seed: int = 0) -> None:
+def plot_lang_3d(data, title: str, path: Path, seed: int = 0, view: str = "token") -> None:
     """Draw one 3-D PCA scatter per layer (every layer, none skipped) and save the grid as a PNG.
 
     All panels share the same axis limits, so a layer whose cloud collapses really looks smaller.
@@ -162,11 +173,12 @@ def plot_lang_3d(data, title: str, path: Path, seed: int = 0) -> None:
         data: mapping with the arrays of project_3d() (e.g. the loaded {lang}.npz).
         title: figure title, e.g. "gemma-3-1b-pt / in22-gen / hin_Deva".
         path: output .png file (parent folders are created).
-        seed: picks which tokens are drawn when there are more than PCA_MAX_SHOW (same at every layer).
+        seed: picks which points are drawn when there are more than PCA_MAX_SHOW (same at every layer).
+        view: which view the points are (VIEW_LABELS key), for the titles.
     """
     coords, var_ratio, spread = (np.asarray(data[k], dtype=np.float32) for k in ("coords", "var_ratio", "spread"))
     n_layers, n = coords.shape[:2]
-    # Draw at most PCA_MAX_SHOW tokens: the same ones at every layer, so panels stay comparable
+    # Draw at most PCA_MAX_SHOW points: the same ones at every layer, so panels stay comparable
     if n > PCA_MAX_SHOW:
         coords = coords[:, np.sort(np.random.default_rng(seed).choice(n, PCA_MAX_SHOW, replace=False))]
     shown = coords.shape[1]
@@ -204,11 +216,12 @@ def plot_lang_3d(data, title: str, path: Path, seed: int = 0) -> None:
         ax.tick_params(labelsize=6, colors=MUTED, pad=-3)
         ax.view_init(elev=20, azim=-60)
 
-    sample = f"{n} tokens" + (f", {shown} drawn" if shown < n else "")
-    fig.suptitle(f"{title}: 3-D PCA of token representations per layer ({sample})",
+    unit, what = VIEW_LABELS.get(view, ("points", view))
+    sample = f"{n} {unit}" + (f", {shown} drawn" if shown < n else "")
+    fig.suptitle(f"{title}: 3-D PCA of {what} per layer ({sample})",
                  color=INK, fontsize=13, fontweight="bold", y=1 - 0.25 / fig.get_figheight())
     fig.text(0.5, 1 - 0.6 / fig.get_figheight(),
-             "Tokens scaled to unit length, PCA fitted per layer; same axes in every panel.   "
+             "Vectors scaled to unit length, PCA fitted per layer; same axes in every panel.   "
              "spread = RMS distance from the centroid in PC1-3;  top-3 var = share of total variance on PC1-3",
              ha="center", va="top", fontsize=9, color=MUTED)
     fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01, top=1 - 0.9 / fig.get_figheight(),
@@ -221,15 +234,15 @@ def plot_lang_3d(data, title: str, path: Path, seed: int = 0) -> None:
 
 def plot_results(root: str | Path = "results", models: list[str] | None = None,
                  datasets: list[str] | None = None, langs: list[str] | None = None) -> list[Path]:
-    """Plot every saved (model, dataset, language), optionally filtered: the metric CSVs and the
+    """Plot every saved (model, dataset, language, view), optionally filtered: the metric CSVs and the
     3-D PCA projections.
 
     Args:
         root: results folder.
         models, datasets, langs: keep only these (None = all saved ones).
     Returns:
-        The paths of the written PNGs; {root}/{model}/{dataset}/plots/{lang}.png and
-        {root}/{model}/{dataset}/plots/pca3d/{lang}.png.
+        The paths of the written PNGs; {root}/{model}/{dataset}/{lang}/{view}/metrics.png and
+        .../{view}/pca3d.png.
     """
     store = ResultStore(root)
 
@@ -240,16 +253,16 @@ def plot_results(root: str | Path = "results", models: list[str] | None = None,
     paths = []
     df = store.load_all()
     if not df.empty:
-        for (model, dataset, lang), g in df.groupby(["model", "dataset", "lang"]):
+        for (model, dataset, lang, view), g in df.groupby(["model", "dataset", "lang", "view"]):
             if wanted(model, dataset, lang):
-                path = store.root / model / dataset / "plots" / f"{lang}.png"
+                path = store.view_dir(model, dataset, lang, view) / "metrics.png"
                 plot_lang(g, path)
                 paths.append(path)
-    for f, (model, dataset, lang) in store.pca3d_files():
+    for f, (model, dataset, lang, view) in store.pca3d_files():
         if wanted(model, dataset, lang):
-            path = store.root / model / dataset / "plots" / "pca3d" / f"{lang}.png"
+            path = f.with_name("pca3d.png")
             with np.load(f) as data:
-                plot_lang_3d(data, f"{model} / {dataset} / {lang}", path)
+                plot_lang_3d(data, f"{model} / {dataset} / {lang}", path, view=view)
             paths.append(path)
     if paths:
         log.info("saved %d plot(s) under %s", len(paths), store.root)
