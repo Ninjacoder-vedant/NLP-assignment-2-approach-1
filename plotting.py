@@ -45,7 +45,8 @@ INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e1e0d9"
 
 # 3-D panels: ordinary layers, the penultimate layer (N-1) and the final layer (N)
 LAYER_COLOR, PENULT_COLOR, FINAL_COLOR = "#2a78d6", "#e34948", "#1baf7a"
-PCA_COLS = 6              # panels per row of the 3-D figure
+PCA_COLS = 3              # panels per row of the 3-D figure
+PCA_N_LAYERS = 6          # layers drawn in the 3-D figure: evenly spaced, always incl. first and last
 PCA_MAX_SHOW = 5000       # tokens drawn per panel (display only; the .npz keeps all N)
 
 
@@ -93,7 +94,9 @@ def plot_lang(df: pd.DataFrame, path: Path) -> None:
         _style(ax2)
 
     bottom = axes[-1, 0]
-    bottom.set_xlabel("layer (0 = embedding output)", color=MUTED)
+    bottom.set_xlabel("model stage (embedding output, then transformer blocks)", color=MUTED)
+    if "stage" in df:
+        bottom.set_xticks(df["layer"], df["stage"], rotation=45, ha="right")
     bottom.xaxis.set_major_locator(MaxNLocator(integer=True))
     fig.suptitle(f"{row['model']} / {row['dataset']} / {row['lang']}   (N={row['n_tokens']}, d={row['d']})",
                  color=INK, fontsize=11)
@@ -153,16 +156,22 @@ def _layer_title(layer: int, last: int) -> tuple[str, str]:
     return (f"Layer {layer} (embeddings)" if layer == 0 else f"Layer {layer}"), LAYER_COLOR
 
 
-def plot_lang_3d(data, title: str, path: Path, seed: int = 0) -> None:
-    """Draw one 3-D PCA scatter per layer (every layer, none skipped) and save the grid as a PNG.
+def plot_lang_3d(data, title: str, path: Path, seed: int = 0,
+                 n_show: int = PCA_N_LAYERS, cols: int = PCA_COLS, shared: bool = False,
+                 q: float = 0.995) -> None:
+    """Draw a 3-D PCA scatter for PCA_N_LAYERS evenly spaced layers (first and last always included).
 
-    All panels share the same axis limits, so a layer whose cloud collapses really looks smaller.
+    Axis limits are per panel so every cloud is clearly visible; the "spread" box gives the true size.
 
     Args:
         data: mapping with the arrays of project_3d() (e.g. the loaded {lang}.npz).
         title: figure title, e.g. "gemma-3-1b-pt / in22-gen / hin_Deva".
         path: output .png file (parent folders are created).
         seed: picks which tokens are drawn when there are more than PCA_MAX_SHOW (same at every layer).
+        n_show: how many layers to draw (pass a big number for every layer).
+        cols: panels per row.
+        shared: one axis limit for every panel (widest layer's) instead of one per panel.
+        q: quantile of |coords| that sets the axis limit; lower = tighter zoom, more outliers dropped.
     """
     coords, var_ratio, spread = (np.asarray(data[k], dtype=np.float32) for k in ("coords", "var_ratio", "spread"))
     n_layers, n = coords.shape[:2]
@@ -172,22 +181,25 @@ def plot_lang_3d(data, title: str, path: Path, seed: int = 0) -> None:
     shown = coords.shape[1]
     # Fainter points when there are many, so dense cores still show their shape
     alpha = float(np.clip(1000 / max(shown, 1), 0.15, 0.6))
-    # One symmetric limit for every axis of every panel: the widest layer's 99.5% quantile, so a few
-    # far outliers don't shrink everything else
-    lim = float(np.quantile(np.abs(coords), 0.995, axis=(1, 2)).max()) * 1.1 or 1.0
-    ticks = [-lim * 0.8, 0, lim * 0.8]
-    tick_fmt = "{x:.2f}" if lim < 1 else "{x:.1f}"
+    # Only PCA_N_LAYERS layers, evenly spaced, always including layer 0 (embeddings) and the last layer
+    shown_layers = np.unique(np.linspace(0, n_layers - 1, min(n_show, n_layers)).round().astype(int))
 
-    ncols = min(PCA_COLS, n_layers)
-    nrows = math.ceil(n_layers / ncols)
-    fig = plt.figure(figsize=(3.1 * ncols, 3.1 * nrows + 0.9))
-    for layer in range(n_layers):
-        ax = fig.add_subplot(nrows, ncols, layer + 1, projection="3d")
+    ncols = min(cols, len(shown_layers))
+    nrows = math.ceil(len(shown_layers) / ncols)
+    fig = plt.figure(figsize=(6 * ncols, 6 * nrows + 0.9))
+    for i, layer in enumerate(shown_layers):
+        ax = fig.add_subplot(nrows, ncols, i + 1, projection="3d")
         name, color = _layer_title(layer, n_layers - 1)
+        # Per-panel limit (99.5% quantile of |coords|) so each cloud fills its box; a few far outliers
+        # are dropped instead of shrinking the cloud. Compare layers by the "spread" box, not by size.
+        lim = float(np.quantile(np.abs(coords[shown_layers] if shared else coords[layer]), q,
+                                axis=(1, 2) if shared else None).max()) * 1.1 or 1.0
+        ticks = [-lim * 0.8, 0, lim * 0.8]
+        tick_fmt = "{x:.2f}" if lim < 1 else "{x:.1f}"
         # 3-D axes do not clip: drop the few outliers beyond the limits instead of drawing them outside
         inside = (np.abs(coords[layer]) <= lim).all(1)
         x, y, z = coords[layer][inside].T
-        ax.scatter(x, y, z, s=2, color=color, alpha=alpha, linewidths=0, depthshade=False, rasterized=True)
+        ax.scatter(x, y, z, s=6, color=color, alpha=alpha, linewidths=0, depthshade=False, rasterized=True)
         ax.set_title(name, fontsize=10, color=INK, fontweight="bold", pad=0)
         # Metrics box, top left (same idea as the paper figure)
         ax.text2D(0.02, 0.97, f"spread {spread[layer]:.4f}\ntop-3 var {var_ratio[layer].sum():.1%}",
@@ -208,7 +220,7 @@ def plot_lang_3d(data, title: str, path: Path, seed: int = 0) -> None:
     fig.suptitle(f"{title}: 3-D PCA of token representations per layer ({sample})",
                  color=INK, fontsize=13, fontweight="bold", y=1 - 0.25 / fig.get_figheight())
     fig.text(0.5, 1 - 0.6 / fig.get_figheight(),
-             "Tokens scaled to unit length, PCA fitted per layer; same axes in every panel.   "
+             f"Tokens scaled to unit length, PCA fitted per layer; axes {'identical in every panel' if shared else 'rescaled per panel'}.   "
              "spread = RMS distance from the centroid in PC1-3;  top-3 var = share of total variance on PC1-3",
              ha="center", va="top", fontsize=9, color=MUTED)
     fig.subplots_adjust(left=0.01, right=0.99, bottom=0.01, top=1 - 0.9 / fig.get_figheight(),

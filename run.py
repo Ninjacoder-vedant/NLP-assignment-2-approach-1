@@ -126,15 +126,16 @@ class Experiment:
                  len(self.cfg.models), len(self.datasets), len(self.cfg.langs), self.cfg.device)
 
         # Traverse the model keys
-        for key in self.cfg.models:
+        for i_model, key in enumerate(self.cfg.models, 1):
             # Find the model spec
             spec = MODEL_SPECS[key]
-            log.info("[%s] checking saved results", key)
+            log.info("[%d/%d] model=%s  checking saved results", i_model, len(self.cfg.models), key)
 
             # todo = {dataset name: languages still to compute for this model}
             todo = {}
 
             for ds in self.datasets:
+                log.info("[%s] loading dataset %s (may download on first run)...", key, ds.name)
                 # Stop if this folder holds results made with different settings
                 self.store.check_or_save_config(key, ds.name, self.settings(spec, ds), self.cfg.overwrite)
                 # Languages this dataset actually has (e.g. Wikipedia has no Bodo/Dogri)
@@ -144,14 +145,18 @@ class Experiment:
                     log.info("%s has no %s", ds.name, missing)
                 # Keep only languages that exist and have no saved CSV yet (resume)
                 todo[ds.name] = [l for l in self.cfg.langs if l in have and not self.store.exists(key, ds.name, l)]
-            
+                log.info("[%s/%s] %d language(s) todo, %d already done",
+                         key, ds.name, len(todo[ds.name]),
+                         len(self.cfg.langs) - len(todo[ds.name]))
+
             # Nothing left for this model: don't even load it
             if not any(todo.values()):
                 log.info("[%s] everything already done", key)
                 continue
 
-            log.info("[%s] loading %s", key, spec.hf_id)
+            log.info("[%s] loading model from %s ...", key, spec.hf_id)
             model = load_model(spec, self.cfg.device, self.cfg.dtype)
+            log.info("[%s] model loaded", key)
 
             # try/finally: free GPU memory even if a dataset crashes
             try:
@@ -187,9 +192,9 @@ class Experiment:
         for i_lang, lang in enumerate(langs, 1):
             tag = f"[{key}/{ds.name}/{lang}]"
             # Load the language dataset and run the model over every text
-            log.info("%s (%d/%d) loading texts", tag, i_lang, len(langs))
+            log.info("%s (%d/%d) loading texts...", tag, i_lang, len(langs))
             texts = ds.load(lang)
-            log.info("%s inference on %d texts", tag, len(texts))
+            log.info("%s loaded %d texts  running inference...", tag, len(texts))
             layers = ext.extract(texts)
             # Token statistics for token_stats.csv (fertility = tokens per word, words split on whitespace)
             n_real, n_words = len(layers[0]), sum(len(t.split()) for t in texts)
@@ -213,14 +218,15 @@ class Experiment:
             points = ext.sample(layers, n, rng)
             del layers
             n_layers, d = points.shape[0], points.shape[-1]
+            stages = ext.model.layer_stages(n_layers)
             # One row per layer: identifying columns + all metric values (** merges the metric dict in)
-            log.info("%s computing metrics on %d layers", tag, n_layers)
+            log.info("%s computing metrics on %d layers x %d tokens x d=%d", tag, n_layers, points.shape[1], d)
             rows = []
             for i in range(n_layers):
                 rows.append({"model": key, "dataset": ds.name, "lang": lang, "source_code": stat["source_code"],
-                             "layer": i, "n_tokens": points.shape[1], "d": d,
+                             "layer": i, "stage": stages[i], "n_tokens": points.shape[1], "d": d,
                              **compute_layer(self.metrics, points[i])})
-                log.debug("%s layer %d/%d done", tag, i, n_layers - 1)
+                log.info("%s layer %d/%d done", tag, i + 1, n_layers)
             self.store.save_lang(key, ds.name, lang, rows)
             # 3-D PCA projection of every layer, always saved (--plot only decides whether it is drawn)
             self.store.save_pca3d(key, ds.name, lang, project_3d(points))

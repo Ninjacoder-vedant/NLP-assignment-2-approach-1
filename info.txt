@@ -1,0 +1,24 @@
+SYSTEM INFO
+- RAM: 11.9 GB
+- GPU: NVIDIA GeForce 940M, 2 GB VRAM (Maxwell, compute capability 5.0)
+- Integrated: Intel HD Graphics 5500, ~1 GB dedicated; shared memory is just your system RAM (not extra)
+- torch 2.13.0+cpu -> CPU-only build, so cuda.is_available() is False
+
+CAN WE USE THE GPU?
+- 940M: possible in theory, but:
+  - New PyTorch CUDA wheels dropped sm_50 (Maxwell) kernels (around torch 2.7+).
+  - 2 GB VRAM is too small for 0.6B-1B models. Qwen3.5-0.8B in fp16 is ~1.6 GB,
+    plus activations and hidden states -> OOM.
+  - EmbeddingGemma (0.3B, fp16 ~0.6 GB) might just fit.
+  - Would need an old torch (~2.5, CUDA 12.1, still has sm_50); likely
+    incompatible with transformers 5.x. High risk.
+- Intel HD 5500: not supported by PyTorch (XPU backend only supports Arc/Xe).
+
+RECOMMENDATION
+- Stay on CPU. With 11.9 GB RAM, a 0.8B model in float32 needs ~3-4 GB:
+    python run.py --device cpu --dtype float32 --n-tokens 1000 ...
+- Keep --n-tokens small; use --debug to watch progress/memory.
+
+OPTIONAL
+- Try old CUDA torch in an isolated venv to test EmbeddingGemma on the 940M.
+  Low payoff; not done by default.

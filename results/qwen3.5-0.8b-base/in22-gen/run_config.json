@@ -1,0 +1,29 @@
+{
+  "model": "qwen3.5-0.8b-base",
+  "hf_id": "Qwen/Qwen3.5-0.8B-Base",
+  "dtype": "torch.float32",
+  "dataset": "in22-gen",
+  "max_texts": null,
+  "n_tokens": 16000,
+  "seed": 0,
+  "metrics": [
+    "isoscore",
+    "mev",
+    "avgcos",
+    "id"
+  ],
+  "metric_params": {
+    "isoscore": {},
+    "mev": {},
+    "avgcos": {},
+    "id": {
+      "k": 20
+    }
+  },
+  "versions": {
+    "torch": "2.14.0",
+    "transformers": "5.17.0",
+    "sentence-transformers": "6.1.0",
+    "datasets": "5.0.1"
+  }
+}

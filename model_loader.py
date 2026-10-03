@@ -53,7 +53,7 @@ def resolve_dtype(name: str, device: str) -> torch.dtype:
     if name != "auto":
         return getattr(torch, name)
     # Compute capability 8.x+ = Ampere or newer (A100, L4, ...); a T4 is 7.5
-    if device.startswith("cuda") and torch.cuda.get_device_capability(device)[0] >= 8:
+    if device.startswith("cuda") and torch.cuda.is_available() and torch.cuda.get_device_capability(device)[0] >= 8:
         return torch.bfloat16
     return torch.float32
 
@@ -113,6 +113,10 @@ class ModelWrapper(ABC):
         out = self.model(input_ids=input_ids, attention_mask=attention_mask,
                          output_hidden_states=True, **self.forward_kwargs)
         return out.hidden_states
+
+    def layer_stages(self, n_states: int) -> list[str]:
+        """Name embedding output and transformer outputs without assuming model internals."""
+        return ["embedding"] + [f"block_{i}" for i in range(1, n_states)]
 
     def unload(self) -> None:
         """Delete the model and free its GPU memory."""

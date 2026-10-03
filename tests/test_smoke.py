@@ -71,6 +71,8 @@ def test_run_resume_and_config_guard(tmp_path):
     assert set(df.model) == set(TINY) and set(df.lang) == {"hin_Deva", "tam_Taml", "tel_Telu"}
     for (m, l), g in df.groupby(["model", "lang"]):
         assert sorted(g.layer) == list(range(len(g)))                   # embeddings + every layer
+        assert g.stage.iloc[0] == "embedding"
+        assert g.stage.iloc[1:].tolist() == [f"block_{i}" for i in range(1, len(g))]
         assert g[["isoscore", "mev", "avg_cos"]].notna().all().all()
         # ID is NaN only where there are too few distinct points (layer 0 of a 15-word vocabulary)
         assert (g.id_mle.notna() | (g.id_n_unique <= 20)).all() and g.id_mle.iloc[1:].notna().all()

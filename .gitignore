@@ -8,3 +8,20 @@ cache/
 .env*
 !.env.example
 doubts.md
+.claude
+
+# Ruflo local secrets and runtime data
+.env
+.env.local
+.env.*.local
+.claude-flow/
+.swarm/
+.agents/
+.mcp.json
+AGENTS.md
+CLAUDE.md
+
+# Codex local configuration
+.codex/
+# Claude Flow runtime data
+# Environment variables
