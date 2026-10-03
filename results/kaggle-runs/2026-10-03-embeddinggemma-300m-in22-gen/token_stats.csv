@@ -1,0 +1,3 @@
+lang,source_code,n_texts,n_words,n_tokens,fertility,status,n_tokens_used
+eng_Latn,eng_Latn,1024,25347,33896,1.3372785734011914,done,33896
+hin_Deva,hin_Deva,1024,29541,43862,1.4847838597203886,done,43862

@@ -1,0 +1,31 @@
+{
+  "model": "embeddinggemma-300m",
+  "hf_id": "google/embeddinggemma-300m",
+  "dtype": "torch.float32",
+  "dataset": "in22-gen",
+  "max_texts": null,
+  "n_tokens": null,
+  "token_sampling": null,
+  "pooling": "mean / last over non-special tokens",
+  "seed": 0,
+  "metrics": [
+    "isoscore",
+    "mev",
+    "avgcos",
+    "id"
+  ],
+  "metric_params": {
+    "isoscore": {},
+    "mev": {},
+    "avgcos": {},
+    "id": {
+      "k": 20
+    }
+  },
+  "versions": {
+    "torch": "2.11.0+cu128",
+    "transformers": "5.16.1",
+    "sentence-transformers": "5.7.0",
+    "datasets": "4.8.5"
+  }
+}
