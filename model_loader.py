@@ -133,16 +133,13 @@ class ModelWrapper(ABC):
 
     @torch.inference_mode()
     def _split_final_norm(self) -> str | None:
-        """Detect a norm after the last layer; if there is one, keep the last layer's raw output too.
+        """Detect and capture the input to a final norm, if the model has one.
 
-        Sets tie_last_hidden_states=False, so hidden_states[-1] is the last layer before the final norm,
-        and hidden_states() appends last_hidden_state (after it). One test forward checks that
-        norm(hidden_states[-1]) == last_hidden_state, i.e. the split is exactly the final norm.
+        A pre-forward hook records the exact tensor passed into the norm. This avoids recomputing
+        the norm separately, which can differ numerically from the model's own forward result.
 
         Returns:
             Dotted path of the final norm module, or None if the model has none.
-        Raises:
-            RuntimeError: if the norm exists but the outputs do not match norm(pre) == post.
         """
         path, norm, decoder = find_final_norm(self.model)
         # A norm module that forward never calls does not count
@@ -150,18 +147,15 @@ class ModelWrapper(ABC):
             log.info("[%s] no final norm after the last layer: L+1 hidden states", self.spec.key)
             return None
         set_tie_last_hidden_states(self.model, False)
-
-        enc = self.tokenizer("Hello, how are you?", return_tensors="pt")
-        out = self.model(input_ids=enc["input_ids"].to(self.device),
-                         attention_mask=enc["attention_mask"].to(self.device),
-                         output_hidden_states=True, **self.forward_kwargs)
-        pre, post = out.hidden_states[-1], out.last_hidden_state
-        if not torch.allclose(norm(pre).float(), post.float(), rtol=1e-4, atol=1e-5):
-            raise RuntimeError(f"[{self.spec.key}] {path} found, but norm(hidden_states[-1]) != last_hidden_state "
-                               "with tie_last_hidden_states=False")
+        self._final_norm_input: torch.Tensor | None = None
+        self._final_norm_hook = norm.register_forward_pre_hook(self._capture_final_norm_input)
         log.info("[%s] final norm %s after the last layer: L+2 hidden states (before and after it)",
                  self.spec.key, path)
         return path
+
+    def _capture_final_norm_input(self, module: torch.nn.Module, inputs: tuple[torch.Tensor, ...]) -> None:
+        """Keep the exact pre-norm activation from the current model forward pass."""
+        self._final_norm_input = inputs[0]
 
     def layer_names(self, n: int) -> list[str]:
         """Names of the n entries hidden_states() returns, e.g. for plots and metrics.csv.
@@ -199,10 +193,16 @@ class ModelWrapper(ABC):
             Tensors of shape [B, T, d]: embedding output, then after each layer (L+1). With a final norm,
             the last layer is its raw output and last_hidden_state (after the norm) is appended (L+2).
         """
+        if self.final_norm:
+            self._final_norm_input = None
         out = self.model(input_ids=input_ids, attention_mask=attention_mask,
                          output_hidden_states=True, **self.forward_kwargs)
         if self.final_norm:
-            return (*out.hidden_states, out.last_hidden_state)
+            pre_norm = self._final_norm_input
+            self._final_norm_input = None
+            if pre_norm is None:
+                raise RuntimeError(f"[{self.spec.key}] final norm hook did not run")
+            return (*out.hidden_states[:-1], pre_norm, out.last_hidden_state)
         return out.hidden_states
 
     def layer_stages(self, n_states: int) -> list[str]:
@@ -216,6 +216,8 @@ class ModelWrapper(ABC):
     def unload(self) -> None:
         """Delete the model and free its GPU memory."""
         # Drop the model reference and return its GPU memory
+        if hasattr(self, "_final_norm_hook"):
+            self._final_norm_hook.remove()
         del self.model
         free_cuda()
 
