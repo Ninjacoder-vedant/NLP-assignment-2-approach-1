@@ -69,7 +69,7 @@ class ResultStore:
 
         Args:
             model, dataset, lang, view: identify the file.
-            points: [L+1, N, d] tensor; load one layer with safe_open(path, "pt").get_slice("points")[layer].
+            points: [H, N, d] tensor (H = L+1, or L+2 with a final norm); load one layer with safe_open(path, "pt").get_slice("points")[layer].
         """
         path = self.view_dir(model, dataset, lang, view) / "points.safetensors"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,13 +80,15 @@ class ResultStore:
 
         Args:
             model, dataset, lang, view: identify the file.
-            proj: {"coords": [L+1, N, 3], "var_ratio": [L+1, 3], "spread": [L+1]}.
+            proj: {"coords": [H, N, 3], "var_ratio": [H, 3], "spread": [H]} and optionally "layer_names": [H]
+                (H = number of hidden states, L+1 or L+2 with a final norm).
         """
         path = self.view_dir(model, dataset, lang, view) / "pca3d.npz"
         path.parent.mkdir(parents=True, exist_ok=True)
         # float16 coordinates: unit-length vectors, so the precision is plenty for plotting
         np.savez_compressed(path, coords=proj["coords"].astype(np.float16), var_ratio=proj["var_ratio"],
-                            spread=proj["spread"])
+                            spread=proj["spread"], **({"layer_names": np.array(proj["layer_names"])}
+                                                      if "layer_names" in proj else {}))
 
     def pca3d_files(self) -> list[tuple[Path, tuple[str, str, str, str]]]:
         """Every saved 3-D projection as (path, (model, dataset, lang, view))."""

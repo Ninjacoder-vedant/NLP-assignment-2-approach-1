@@ -72,3 +72,7 @@ tzdata==2026.4
 urllib3==2.8.0
 xxhash==4.0.1
 yarl==1.25.1
+
+# Optional accelerated kernels for Qwen3.5 linear-attention layers.
+flash-linear-attention>=0.5.2
+causal-conv1d>=1.7.0

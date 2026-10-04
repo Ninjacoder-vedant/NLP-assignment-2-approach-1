@@ -26,4 +26,5 @@ CLAUDE.md
 # Codex local configuration
 .codex/
 # Claude Flow runtime data
+logs
 # Environment variables

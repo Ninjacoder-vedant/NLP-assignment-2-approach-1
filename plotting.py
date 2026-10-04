@@ -45,8 +45,11 @@ ID_MLE = ("Intrinsic dimension (MLE)", "#4a3aa7")
 # Recessive chart chrome
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e1e0d9"
 
-# 3-D panels: ordinary layers, the penultimate layer (N-1) and the final layer (N)
-LAYER_COLOR, PENULT_COLOR, FINAL_COLOR = "#2a78d6", "#e34948", "#1baf7a"
+# 3-D panels: ordinary layers, the penultimate layer (N-1), the final layer (N) and, for models with a final
+# norm, the final layer after that norm
+LAYER_COLOR, PENULT_COLOR, FINAL_COLOR, NORMED_COLOR = "#2a78d6", "#e34948", "#1baf7a", "#4a3aa7"
+# Suffix of the layer_name of the extra entry that model_loader.layer_names adds after a final norm
+AFTER_NORM = "(after final norm)"
 PCA_COLS = 6              # panels per row of the 3-D figure
 PCA_MAX_SHOW = 5000       # points drawn per panel (display only; the .npz keeps all N)
 
@@ -69,6 +72,23 @@ def _style(ax) -> None:
     ax.tick_params(colors=MUTED, labelsize=9)
 
 
+def _post_norm_layer(names) -> int | None:
+    """Index of the 'after final norm' entry (always the last one), or None when there is none."""
+    names = [str(n) for n in names]
+    return len(names) - 1 if names and names[-1].endswith(AFTER_NORM) else None
+
+
+def _plot_metric(ax, df: pd.DataFrame, col: str, color: str, post: int | None, label: str | None = None) -> None:
+    """Draw one metric against depth; the after-final-norm point is a hollow marker joined by a dotted line."""
+    pre = df if post is None else df[df["layer"] < post]
+    ax.plot(pre["layer"], pre[col], color=color, linewidth=2, marker="o", markersize=4, label=label)
+    if post is not None:
+        both = df[df["layer"] >= post - 1]
+        ax.plot(both["layer"], both[col], color=color, linewidth=1.2, linestyle=":")
+        ax.plot(df["layer"].iloc[-1], df[col].iloc[-1], color=color, marker="D", markersize=6,
+                markerfacecolor="white", markeredgewidth=1.6, linestyle="none")
+
+
 def plot_lang(df: pd.DataFrame, path: Path) -> None:
     """Draw layer depth vs every isotropy metric of one (model, dataset, language, view) and save it.
 
@@ -78,6 +98,8 @@ def plot_lang(df: pd.DataFrame, path: Path) -> None:
     """
     df = df.sort_values("layer")
     row = df.iloc[0]
+    # Older CSVs have no layer_name column: then there is no before/after-norm split to mark
+    post = _post_norm_layer(df["layer_name"]) if "layer_name" in df else None
     has_id = "id_mle" in df and df["id_mle"].notna().any()
     # Second, shorter panel only when there is an id_mle column to show
     fig, axes = plt.subplots(2 if has_id else 1, 1, figsize=(8, 6.5 if has_id else 4.5), sharex=True,
@@ -86,7 +108,7 @@ def plot_lang(df: pd.DataFrame, path: Path) -> None:
 
     for col, (label, color) in BOUNDED.items():
         if col in df:
-            ax.plot(df["layer"], df[col], color=color, linewidth=2, marker="o", markersize=4, label=label)
+            _plot_metric(ax, df, col, color, post, label)
     # avg_cos can go negative: mark zero so the sign is readable
     ax.axhline(0, color="#c3c2b7", linewidth=1, zorder=0)
     ax.set_ylabel("metric value", color=MUTED)
@@ -96,17 +118,31 @@ def plot_lang(df: pd.DataFrame, path: Path) -> None:
     if has_id:
         label, color = ID_MLE
         ax2 = axes[1, 0]
-        ax2.plot(df["layer"], df["id_mle"], color=color, linewidth=2, marker="o", markersize=4)
+        _plot_metric(ax2, df, "id_mle", color, post)
         ax2.set_ylabel(label, color=MUTED, fontsize=9)
         ax2.set_ylim(bottom=0)
         _style(ax2)
 
     bottom = axes[-1, 0]
-    bottom.set_xlabel("model stage (embedding output, then transformer blocks)", color=MUTED)
-    if "stage" in df:
+    if post is None and "stage" in df:
+        bottom.set_xlabel("model stage (embedding output, then transformer blocks)", color=MUTED)
         bottom.set_xticks(df["layer"], df["stage"], rotation=45, ha="right")
-    else:
+    elif post is None:
+        bottom.set_xlabel("layer (0 = embedding output)", color=MUTED)
         bottom.xaxis.set_major_locator(MaxNLocator(integer=True))
+    else:
+        # Shade the extra entry in every panel and name it on the x axis: "L+norm"
+        for a in axes[:, 0]:
+            a.axvspan(post - 0.5, post + 0.5, color="#f1f0ea", zorder=0)
+        ax.text(post, 1.0, "after\nfinal norm", transform=ax.get_xaxis_transform(), ha="center", va="top",
+                fontsize=8, color=MUTED)
+        # Integer ticks up to the last layer, dropping any that would crowd it
+        ticks = [int(t) for t in MaxNLocator(integer=True).tick_values(0, post - 1) if 0 <= t <= post - 3]
+        ticks.append(post - 1)
+        bottom.set_xticks(ticks + [post])
+        bottom.set_xticklabels([str(t) for t in ticks] + [f"\n{post - 1}+norm"])   # one line lower: no overlap
+        bottom.set_xlabel(f"layer (0 = embedding output; {post - 1} = last layer before the final norm, "
+                          f"{post - 1}+norm = after it)", color=MUTED)
     unit, what = VIEW_LABELS.get(row["view"], ("points", row["view"]))
     fig.suptitle(f"{row['model']} / {row['dataset']} / {row['lang']}: {what}\n(N={row['n_points']} {unit}, "
                  f"d={row['d']})", color=INK, fontsize=11)
@@ -126,7 +162,7 @@ def project_3d(points: torch.Tensor, device: str | torch.device | None = None) -
     layers with very different norms share one scale and can be drawn on the same axes.
 
     Args:
-        points: [L+1, N, d] hidden states (the same N points at every layer), on any device.
+        points: [H, N, d] hidden states (H = L+1, or L+2 with a final norm) (the same N points at every layer), on any device.
         device: where to compute, one layer at a time (None = where points are).
     Returns:
         {"coords": [L+1, N, 3] float32 PC1-3 coordinates of the centred unit vectors,
@@ -158,10 +194,14 @@ def project_3d(points: torch.Tensor, device: str | torch.device | None = None) -
             "spread": np.array(spread, dtype=np.float32)}
 
 
-def _layer_title(layer: int, last: int) -> tuple[str, str]:
-    """Panel title and colour: the final and penultimate layers are marked like in the paper figure."""
+def _layer_title(layer: int, n_layers: int, post: int | None) -> tuple[str, str]:
+    """Panel title and colour: the final and penultimate layers are marked like in the paper figure, and
+    with a final norm the last layer is shown before and after it."""
+    last = n_layers - 1 if post is None else post - 1
+    if post is not None and layer == post:
+        return f"Layer {last} (final N, after norm)", NORMED_COLOR
     if layer == last:
-        return f"Layer {layer} (final N)", FINAL_COLOR
+        return f"Layer {layer} (final N" + (", before norm)" if post is not None else ")"), FINAL_COLOR
     if layer == last - 1:
         return f"Layer {layer} (N-1)", PENULT_COLOR
     return (f"Layer {layer} (embeddings)" if layer == 0 else f"Layer {layer}"), LAYER_COLOR
@@ -173,7 +213,8 @@ def plot_lang_3d(data, title: str, path: Path, seed: int = 0, view: str = "token
     All panels share the same axis limits, so a layer whose cloud collapses really looks smaller.
 
     Args:
-        data: mapping with the arrays of project_3d() (e.g. the loaded {lang}.npz).
+        data: mapping with the arrays of project_3d() (e.g. the loaded pca3d.npz), plus optional
+            "layer_names" (from model_loader.layer_names) to mark the last layer before/after the final norm.
         title: figure title, e.g. "gemma-3-1b-pt / in22-gen / hin_Deva".
         path: output .png file (parent folders are created).
         seed: picks which points are drawn when there are more than PCA_MAX_SHOW (same at every layer).
@@ -181,6 +222,8 @@ def plot_lang_3d(data, title: str, path: Path, seed: int = 0, view: str = "token
     """
     coords, var_ratio, spread = (np.asarray(data[k], dtype=np.float32) for k in ("coords", "var_ratio", "spread"))
     n_layers, n = coords.shape[:2]
+    # Older .npz files have no layer_names: then there is no before/after-norm split to mark
+    post = _post_norm_layer(data["layer_names"]) if "layer_names" in data else None
     # Draw at most PCA_MAX_SHOW points: the same ones at every layer, so panels stay comparable
     if n > PCA_MAX_SHOW:
         coords = coords[:, np.sort(np.random.default_rng(seed).choice(n, PCA_MAX_SHOW, replace=False))]
@@ -198,7 +241,7 @@ def plot_lang_3d(data, title: str, path: Path, seed: int = 0, view: str = "token
     fig = plt.figure(figsize=(3.1 * ncols, 3.1 * nrows + 0.9))
     for layer in range(n_layers):
         ax = fig.add_subplot(nrows, ncols, layer + 1, projection="3d")
-        name, color = _layer_title(layer, n_layers - 1)
+        name, color = _layer_title(layer, n_layers, post)
         # 3-D axes do not clip: drop the few outliers beyond the limits instead of drawing them outside
         inside = (np.abs(coords[layer]) <= lim).all(1)
         x, y, z = coords[layer][inside].T

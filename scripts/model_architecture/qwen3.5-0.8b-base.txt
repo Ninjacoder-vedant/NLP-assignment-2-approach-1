@@ -1,0 +1,333 @@
+===== qwen3.5-0.8b-base  (Qwen/Qwen3.5-0.8B-Base, family=hf) =====
+
+Backbone class: transformers.models.qwen3_5.modeling_qwen3_5.Qwen3_5Model
+Config class:   Qwen3_5Config
+Tokenizer:      Qwen3_5Tokenizer
+dtype: torch.float32, device: cuda:0
+
+Qwen3_5Model(
+  (visual): Qwen3_5VisionModel(
+    (patch_embed): Qwen3_5VisionPatchEmbed(
+      (proj): Conv3d(3, 768, kernel_size=(2, 16, 16), stride=(2, 16, 16))
+    )
+    (pos_embed): Embedding(2304, 768)
+    (rotary_pos_emb): Qwen3_5VisionRotaryEmbedding()
+    (blocks): ModuleList(
+      (0-11): 12 x Qwen3_5VisionBlock(
+        (norm1): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+        (norm2): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+        (attn): Qwen3_5VisionAttention(
+          (qkv): Linear(in_features=768, out_features=2304, bias=True)
+          (proj): Linear(in_features=768, out_features=768, bias=True)
+        )
+        (mlp): Qwen3_5VisionMLP(
+          (linear_fc1): Linear(in_features=768, out_features=3072, bias=True)
+          (linear_fc2): Linear(in_features=3072, out_features=768, bias=True)
+          (act_fn): GELUTanh()
+        )
+      )
+    )
+    (merger): Qwen3_5VisionPatchMerger(
+      (norm): LayerNorm((768,), eps=1e-06, elementwise_affine=True)
+      (linear_fc1): Linear(in_features=3072, out_features=3072, bias=True)
+      (act_fn): GELU(approximate='none')
+      (linear_fc2): Linear(in_features=3072, out_features=1024, bias=True)
+    )
+  )
+  (language_model): Qwen3_5TextModel(
+    (embed_tokens): Embedding(248320, 1024)
+    (layers): ModuleList(
+      (0-2): 3 x Qwen3_5DecoderLayer(
+        (linear_attn): Qwen3_5GatedDeltaNet(
+          (conv1d): Conv1d(6144, 6144, kernel_size=(4,), stride=(1,), padding=(3,), groups=6144, bias=False)
+          (norm): Qwen3_5RMSNormGated()
+          (out_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (in_proj_qkv): Linear(in_features=1024, out_features=6144, bias=False)
+          (in_proj_z): Linear(in_features=1024, out_features=2048, bias=False)
+          (in_proj_b): Linear(in_features=1024, out_features=16, bias=False)
+          (in_proj_a): Linear(in_features=1024, out_features=16, bias=False)
+        )
+        (mlp): Qwen3_5MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (down_proj): Linear(in_features=3584, out_features=1024, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+      )
+      (3): Qwen3_5DecoderLayer(
+        (self_attn): Qwen3_5Attention(
+          (q_proj): Linear(in_features=1024, out_features=4096, bias=False)
+          (k_proj): Linear(in_features=1024, out_features=512, bias=False)
+          (v_proj): Linear(in_features=1024, out_features=512, bias=False)
+          (o_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (q_norm): Qwen3_5RMSNorm((256,), eps=1e-06)
+          (k_norm): Qwen3_5RMSNorm((256,), eps=1e-06)
+        )
+        (mlp): Qwen3_5MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (down_proj): Linear(in_features=3584, out_features=1024, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+      )
+      (4-6): 3 x Qwen3_5DecoderLayer(
+        (linear_attn): Qwen3_5GatedDeltaNet(
+          (conv1d): Conv1d(6144, 6144, kernel_size=(4,), stride=(1,), padding=(3,), groups=6144, bias=False)
+          (norm): Qwen3_5RMSNormGated()
+          (out_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (in_proj_qkv): Linear(in_features=1024, out_features=6144, bias=False)
+          (in_proj_z): Linear(in_features=1024, out_features=2048, bias=False)
+          (in_proj_b): Linear(in_features=1024, out_features=16, bias=False)
+          (in_proj_a): Linear(in_features=1024, out_features=16, bias=False)
+        )
+        (mlp): Qwen3_5MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (down_proj): Linear(in_features=3584, out_features=1024, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+      )
+      (7): Qwen3_5DecoderLayer(
+        (self_attn): Qwen3_5Attention(
+          (q_proj): Linear(in_features=1024, out_features=4096, bias=False)
+          (k_proj): Linear(in_features=1024, out_features=512, bias=False)
+          (v_proj): Linear(in_features=1024, out_features=512, bias=False)
+          (o_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (q_norm): Qwen3_5RMSNorm((256,), eps=1e-06)
+          (k_norm): Qwen3_5RMSNorm((256,), eps=1e-06)
+        )
+        (mlp): Qwen3_5MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (down_proj): Linear(in_features=3584, out_features=1024, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+      )
+      (8-10): 3 x Qwen3_5DecoderLayer(
+        (linear_attn): Qwen3_5GatedDeltaNet(
+          (conv1d): Conv1d(6144, 6144, kernel_size=(4,), stride=(1,), padding=(3,), groups=6144, bias=False)
+          (norm): Qwen3_5RMSNormGated()
+          (out_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (in_proj_qkv): Linear(in_features=1024, out_features=6144, bias=False)
+          (in_proj_z): Linear(in_features=1024, out_features=2048, bias=False)
+          (in_proj_b): Linear(in_features=1024, out_features=16, bias=False)
+          (in_proj_a): Linear(in_features=1024, out_features=16, bias=False)
+        )
+        (mlp): Qwen3_5MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (down_proj): Linear(in_features=3584, out_features=1024, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+      )
+      (11): Qwen3_5DecoderLayer(
+        (self_attn): Qwen3_5Attention(
+          (q_proj): Linear(in_features=1024, out_features=4096, bias=False)
+          (k_proj): Linear(in_features=1024, out_features=512, bias=False)
+          (v_proj): Linear(in_features=1024, out_features=512, bias=False)
+          (o_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (q_norm): Qwen3_5RMSNorm((256,), eps=1e-06)
+          (k_norm): Qwen3_5RMSNorm((256,), eps=1e-06)
+        )
+        (mlp): Qwen3_5MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (down_proj): Linear(in_features=3584, out_features=1024, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+      )
+      (12-14): 3 x Qwen3_5DecoderLayer(
+        (linear_attn): Qwen3_5GatedDeltaNet(
+          (conv1d): Conv1d(6144, 6144, kernel_size=(4,), stride=(1,), padding=(3,), groups=6144, bias=False)
+          (norm): Qwen3_5RMSNormGated()
+          (out_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (in_proj_qkv): Linear(in_features=1024, out_features=6144, bias=False)
+          (in_proj_z): Linear(in_features=1024, out_features=2048, bias=False)
+          (in_proj_b): Linear(in_features=1024, out_features=16, bias=False)
+          (in_proj_a): Linear(in_features=1024, out_features=16, bias=False)
+        )
+        (mlp): Qwen3_5MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (down_proj): Linear(in_features=3584, out_features=1024, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+      )
+      (15): Qwen3_5DecoderLayer(
+        (self_attn): Qwen3_5Attention(
+          (q_proj): Linear(in_features=1024, out_features=4096, bias=False)
+          (k_proj): Linear(in_features=1024, out_features=512, bias=False)
+          (v_proj): Linear(in_features=1024, out_features=512, bias=False)
+          (o_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (q_norm): Qwen3_5RMSNorm((256,), eps=1e-06)
+          (k_norm): Qwen3_5RMSNorm((256,), eps=1e-06)
+        )
+        (mlp): Qwen3_5MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (down_proj): Linear(in_features=3584, out_features=1024, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+      )
+      (16-18): 3 x Qwen3_5DecoderLayer(
+        (linear_attn): Qwen3_5GatedDeltaNet(
+          (conv1d): Conv1d(6144, 6144, kernel_size=(4,), stride=(1,), padding=(3,), groups=6144, bias=False)
+          (norm): Qwen3_5RMSNormGated()
+          (out_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (in_proj_qkv): Linear(in_features=1024, out_features=6144, bias=False)
+          (in_proj_z): Linear(in_features=1024, out_features=2048, bias=False)
+          (in_proj_b): Linear(in_features=1024, out_features=16, bias=False)
+          (in_proj_a): Linear(in_features=1024, out_features=16, bias=False)
+        )
+        (mlp): Qwen3_5MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (down_proj): Linear(in_features=3584, out_features=1024, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+      )
+      (19): Qwen3_5DecoderLayer(
+        (self_attn): Qwen3_5Attention(
+          (q_proj): Linear(in_features=1024, out_features=4096, bias=False)
+          (k_proj): Linear(in_features=1024, out_features=512, bias=False)
+          (v_proj): Linear(in_features=1024, out_features=512, bias=False)
+          (o_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (q_norm): Qwen3_5RMSNorm((256,), eps=1e-06)
+          (k_norm): Qwen3_5RMSNorm((256,), eps=1e-06)
+        )
+        (mlp): Qwen3_5MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (down_proj): Linear(in_features=3584, out_features=1024, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+      )
+      (20-22): 3 x Qwen3_5DecoderLayer(
+        (linear_attn): Qwen3_5GatedDeltaNet(
+          (conv1d): Conv1d(6144, 6144, kernel_size=(4,), stride=(1,), padding=(3,), groups=6144, bias=False)
+          (norm): Qwen3_5RMSNormGated()
+          (out_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (in_proj_qkv): Linear(in_features=1024, out_features=6144, bias=False)
+          (in_proj_z): Linear(in_features=1024, out_features=2048, bias=False)
+          (in_proj_b): Linear(in_features=1024, out_features=16, bias=False)
+          (in_proj_a): Linear(in_features=1024, out_features=16, bias=False)
+        )
+        (mlp): Qwen3_5MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (down_proj): Linear(in_features=3584, out_features=1024, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+      )
+      (23): Qwen3_5DecoderLayer(
+        (self_attn): Qwen3_5Attention(
+          (q_proj): Linear(in_features=1024, out_features=4096, bias=False)
+          (k_proj): Linear(in_features=1024, out_features=512, bias=False)
+          (v_proj): Linear(in_features=1024, out_features=512, bias=False)
+          (o_proj): Linear(in_features=2048, out_features=1024, bias=False)
+          (q_norm): Qwen3_5RMSNorm((256,), eps=1e-06)
+          (k_norm): Qwen3_5RMSNorm((256,), eps=1e-06)
+        )
+        (mlp): Qwen3_5MLP(
+          (gate_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (up_proj): Linear(in_features=1024, out_features=3584, bias=False)
+          (down_proj): Linear(in_features=3584, out_features=1024, bias=False)
+          (act_fn): SiLUActivation()
+        )
+        (input_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+        (post_attention_layernorm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+      )
+    )
+    (norm): Qwen3_5RMSNorm((1024,), eps=1e-06)
+    (rotary_emb): Qwen3_5TextRotaryEmbedding()
+  )
+)
+
+Distinct module classes:
+  Conv1d
+  Conv3d
+  Embedding
+  GELU
+  GELUTanh
+  LayerNorm
+  Linear
+  ModuleList
+  Qwen3_5Attention
+  Qwen3_5DecoderLayer
+  Qwen3_5GatedDeltaNet
+  Qwen3_5MLP
+  Qwen3_5Model
+  Qwen3_5RMSNorm
+  Qwen3_5RMSNormGated
+  Qwen3_5TextModel
+  Qwen3_5TextRotaryEmbedding
+  Qwen3_5VisionAttention
+  Qwen3_5VisionBlock
+  Qwen3_5VisionMLP
+  Qwen3_5VisionModel
+  Qwen3_5VisionPatchEmbed
+  Qwen3_5VisionPatchMerger
+  Qwen3_5VisionRotaryEmbedding
+  SiLUActivation
+
+Input: 'Hello, how are you?'
+hidden states: 25 (tied) / 25 (untied), shape per layer (1, 6, 1024)  [batch, seq_len, hidden]
+
+layer | equal |   max |diff| |  mean |diff| |    min cos |   mean cos
+------------------------------------------------------------------------
+    0 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    1 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    2 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    3 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    4 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    5 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    6 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    7 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    8 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+    9 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   10 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   11 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   12 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   13 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   14 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   15 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   16 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   17 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   18 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   19 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   20 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   21 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   22 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   23 |  True |     0.000000 |     0.000000 |   1.000000 |   1.000000
+   24 | False |    29.961010 |     2.646203 |   0.906563 |   0.952711
+
+tied[-1] == last_hidden_state exactly?   True
+untied[-1] == last_hidden_state exactly? False
+
+----- Final norm check -----
+Final norm module:   language_model.norm -> Qwen3_5RMSNorm((1024,), eps=1e-06)
+Qwen3_5TextModel.forward calls self.norm(...)? True
+norm(untied[-1]) == last_hidden_state exactly? True
+max |norm(untied[-1]) - last_hidden_state|:    0.000000
